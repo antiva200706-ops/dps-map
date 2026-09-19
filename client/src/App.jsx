@@ -407,6 +407,28 @@ export default function App() {
             >×</button>
           </div>
 
+          {/* Кнопка Telegram */}
+          <a
+            href="https://t.me/policemap"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              padding: 12,
+              borderRadius: 8,
+              background: '#229ED9',
+              color: 'white',
+              textDecoration: 'none',
+              fontSize: 15,
+              fontWeight: 600,
+            }}
+          >
+            <span style={{ fontSize: 18 }}>✈️</span> Мы в Telegram
+          </a>
+
           <div style={{ padding: 10, background: '#f3f4f6', borderRadius: 8 }}>
             Имя: <b>{profileName}</b>
           </div>
