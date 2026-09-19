@@ -17,7 +17,6 @@ const db = new Pool({ connectionString: process.env.DATABASE_URL });
 const ADMIN_PASSWORD = 'Anton2104kill';
 const ADMIN_NAME = 'Администратор';
 
-// Запрещённые имена (в любом регистре)
 const FORBIDDEN_NAMES = [
   'админ', 'администратор', 'создатель', 'владелец',
   'admin', 'administrator', 'owner', 'creator',
@@ -76,9 +75,8 @@ app.get('/markers', requireDevice, async (req, res) => {
             ST_X(m.location::geometry) AS lng, m.comment,
             m.confirm_votes, m.reject_votes, m.status, m.created_at,
             m.pinned, m.expires_at,
-            u.name AS author_name
+            m.author_name
      FROM markers m
-     LEFT JOIN users u ON u.id = m.user_id
      WHERE (m.status IN ('pending','active') AND m.expires_at > now() OR m.pinned = true)
        AND ST_DWithin(m.location, ST_MakePoint($1,$2)::geography, $3)`,
     [lng, lat, radius]
@@ -90,11 +88,15 @@ app.post('/markers', requireDevice, async (req, res) => {
   const { lat, lng, type, comment } = req.body;
   if (!['dps','camera','accident','roadwork'].includes(type))
     return res.status(400).json({ error: 'bad type' });
+
+  // Фиксируем имя автора в момент создания метки
+  const authorName = req.user.name || 'Аноним';
+
   const { rows } = await db.query(
-    `INSERT INTO markers (user_id, type, location, comment)
-     VALUES ($1, $2, ST_MakePoint($3,$4)::geography, $5)
+    `INSERT INTO markers (user_id, type, location, comment, author_name)
+     VALUES ($1, $2, ST_MakePoint($3,$4)::geography, $5, $6)
      RETURNING id, type, comment, confirm_votes, reject_votes, status, created_at`,
-    [req.user.id, type, lng, lat, comment || null]
+    [req.user.id, type, lng, lat, comment || null, authorName]
   );
   res.json(rows[0]);
 });
@@ -146,14 +148,12 @@ app.post('/markers/:id/vote', requireDevice, async (req, res) => {
 
 // --- Админские роуты ---
 
-// Вход админа — автоматически ставит ему имя "Администратор"
 app.post('/admin/login', async (req, res) => {
   const { password } = req.body;
   const deviceId = req.header('X-Device-Id');
   if (!deviceId) return res.status(400).json({ error: 'no device id' });
   if (password !== ADMIN_PASSWORD) return res.status(401).json({ ok: false });
 
-  // Ставим админу официальное имя
   const u = await getOrCreateUser(deviceId);
   await db.query(
     `UPDATE users SET name = $1 WHERE id = $2`,
@@ -184,7 +184,6 @@ app.post('/admin/pin/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-// Выход из админа — сбрасываем имя обратно
 app.post('/admin/logout', requireDevice, async (req, res) => {
   await db.query(`UPDATE users SET name = NULL WHERE id = $1`, [req.user.id]);
   res.json({ ok: true });
