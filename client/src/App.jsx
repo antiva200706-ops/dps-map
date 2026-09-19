@@ -113,7 +113,6 @@ function timeAgo(iso) {
   return `${h} ч назад`;
 }
 
-// Имя автора с галочками для админа / модератора
 function AuthorName({ name }) {
   const displayName = name || 'Аноним';
   const isAdmin = displayName === ADMIN_NAME;
@@ -126,11 +125,8 @@ function AuthorName({ name }) {
 
   return (
     <span style={{
-      color,
-      fontWeight: weight,
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 4,
+      color, fontWeight: weight,
+      display: 'inline-flex', alignItems: 'center', gap: 4,
     }}>
       {displayName}
       {badgeColor && (
@@ -189,6 +185,7 @@ export default function App() {
 
   const [profileName, setProfileName] = useState('Аноним');
   const [profileId, setProfileId] = useState(null);
+  const [isModerator, setIsModerator] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [nameInput, setNameInput] = useState('');
 
@@ -196,10 +193,11 @@ export default function App() {
   const [adminPass, setAdminPass] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
 
-  // Новые состояния для управления пользователями
-  const [showUsers, setShowUsers] = useState(false);
-  const [users, setUsers] = useState([]);
-  const [usersLoading, setUsersLoading] = useState(false);
+  // Управление юзером по ID
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [targetId, setTargetId] = useState('');
+  const [targetUser, setTargetUser] = useState(null);
+  const [searchError, setSearchError] = useState('');
 
   const mapRef = useRef(null);
   const lastCenterRef = useRef(center);
@@ -265,10 +263,10 @@ export default function App() {
         setAdminPass('');
         setProfileName(ADMIN_NAME);
         loadMarkers();
-        // Обновим профиль (для public_id)
         api.get('/me').then(r => {
           if (r.data.name) setProfileName(r.data.name);
           if (r.data.public_id) setProfileId(r.data.public_id);
+          setIsModerator(!!r.data.is_moderator);
         }).catch(() => {});
         alert('Добро пожаловать, администратор');
       }
@@ -284,7 +282,8 @@ export default function App() {
     setIsAdmin(false);
     setAdminPassword('');
     setProfileName('Аноним');
-    setShowUsers(false);
+    setShowAdminPanel(false);
+    setTargetUser(null);
     loadMarkers();
   }
 
@@ -304,9 +303,10 @@ export default function App() {
   async function adminDeleteOne(id) {
     if (!confirm('Удалить эту метку?')) return;
     try {
-      await api.post(`/admin/delete/${id}`, {}, {
-        headers: { 'X-Admin-Password': adminPassword }
-      });
+      const headers = isAdmin && adminPassword
+        ? { 'X-Admin-Password': adminPassword }
+        : {};
+      await api.post(`/admin/delete/${id}`, {}, { headers });
       loadMarkers();
     } catch (e) {
       alert('Ошибка: ' + (e.response?.data?.error || e.message));
@@ -315,61 +315,51 @@ export default function App() {
 
   async function adminPin(id, pinned) {
     try {
-      await api.post(`/admin/pin/${id}`, { pinned }, {
-        headers: { 'X-Admin-Password': adminPassword }
-      });
+      const headers = isAdmin && adminPassword
+        ? { 'X-Admin-Password': adminPassword }
+        : {};
+      await api.post(`/admin/pin/${id}`, { pinned }, { headers });
       loadMarkers();
     } catch (e) {
       alert('Ошибка: ' + (e.response?.data?.error || e.message));
     }
   }
 
-  // Загрузка списка пользователей
-  async function loadUsers() {
-    setUsersLoading(true);
+  // === Управление пользователем по ID ===
+  async function findUser() {
+    setSearchError('');
+    setTargetUser(null);
+    const id = parseInt(targetId, 10);
+    if (!id) { setSearchError('Введите числовой ID'); return; }
     try {
-      const { data } = await api.get('/admin/users', {
+      // Пробуем найти — делаем действие-заглушку "noop", если такого нет — сервер вернёт 404
+      // Но проще: получить через action с нейтральным запросом — сделаем "search"
+      const res = await api.post(`/admin/user/${id}/action`, { action: 'search' }, {
         headers: { 'X-Admin-Password': adminPassword }
       });
-      setUsers(data);
+      setTargetUser(res.data.user);
     } catch (e) {
-      alert('Ошибка загрузки: ' + (e.response?.data?.error || e.message));
-    } finally {
-      setUsersLoading(false);
+      setSearchError(e.response?.data?.error || 'Пользователь не найден');
     }
   }
 
-  async function toggleBan(publicId, current) {
+  async function userAction(action) {
+    if (!targetUser) return;
     try {
-      await api.post(`/admin/users/${publicId}/ban`, { ban: !current }, {
+      const res = await api.post(`/admin/user/${targetUser.public_id}/action`, { action }, {
         headers: { 'X-Admin-Password': adminPassword }
       });
-      loadUsers();
-    } catch (e) { alert('Ошибка'); }
-  }
-
-  async function toggleCanPost(publicId, current) {
-    try {
-      await api.post(`/admin/users/${publicId}/can-post`, { can_post: !current }, {
-        headers: { 'X-Admin-Password': adminPassword }
-      });
-      loadUsers();
-    } catch (e) { alert('Ошибка'); }
-  }
-
-  async function toggleModerator(publicId, current) {
-    try {
-      await api.post(`/admin/users/${publicId}/moderator`, { is_moderator: !current }, {
-        headers: { 'X-Admin-Password': adminPassword }
-      });
-      loadUsers();
-    } catch (e) { alert('Ошибка'); }
+      setTargetUser(res.data.user);
+    } catch (e) {
+      alert('Ошибка: ' + (e.response?.data?.error || e.message));
+    }
   }
 
   useEffect(() => {
     api.get('/me').then(r => {
       if (r.data.name) setProfileName(r.data.name);
       if (r.data.public_id) setProfileId(r.data.public_id);
+      setIsModerator(!!r.data.is_moderator);
     }).catch(() => {});
 
     navigator.geolocation.getCurrentPosition(
@@ -386,10 +376,7 @@ export default function App() {
     return () => clearInterval(refresh);
   }, []);
 
-  // Когда открывается вкладка пользователей — грузим список
-  useEffect(() => {
-    if (showUsers && isAdmin) loadUsers();
-  }, [showUsers, isAdmin]);
+  const canAdminActions = isAdmin || isModerator;
 
   return (
     <div style={{ height: '100vh', width: '100%', position: 'relative' }}>
@@ -459,7 +446,7 @@ export default function App() {
                   </div>
                 )}
 
-                {isAdmin && (
+                {canAdminActions && (
                   <div style={{ marginTop: 8 }}>
                     <button
                       onClick={() => adminPin(m.id, !m.pinned)}
@@ -530,102 +517,14 @@ export default function App() {
           overflowY: 'auto',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <b style={{ fontSize: 18 }}>
-              {showUsers ? 'Пользователи' : 'Профиль'}
-            </b>
-            <div style={{ display: 'flex', gap: 6 }}>
-              {isAdmin && (
-                <button
-                  onClick={() => setShowUsers(!showUsers)}
-                  style={{
-                    border: 'none',
-                    background: showUsers ? '#dc2626' : '#111827',
-                    color: 'white',
-                    padding: '6px 10px',
-                    borderRadius: 6,
-                    cursor: 'pointer',
-                    fontSize: 12,
-                  }}
-                >{showUsers ? '← Назад' : '👥 Юзеры'}</button>
-              )}
-              <button
-                onClick={() => { setShowProfile(false); setShowUsers(false); }}
-                style={{ border: 'none', background: 'transparent', fontSize: 22, cursor: 'pointer' }}
-              >×</button>
-            </div>
+            <b style={{ fontSize: 18 }}>Профиль</b>
+            <button
+              onClick={() => { setShowProfile(false); setShowAdminPanel(false); }}
+              style={{ border: 'none', background: 'transparent', fontSize: 22, cursor: 'pointer' }}
+            >×</button>
           </div>
 
-          {/* === ВКЛАДКА ПОЛЬЗОВАТЕЛЕЙ === */}
-          {showUsers && isAdmin && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <button
-                onClick={loadUsers}
-                style={{
-                  padding: 8, borderRadius: 6, border: 'none',
-                  background: '#111827', color: 'white', cursor: 'pointer', fontSize: 13,
-                }}
-              >🔄 Обновить список</button>
-
-              {usersLoading && <div style={{ color: '#888' }}>Загрузка...</div>}
-
-              {users.map(u => (
-                <div key={u.public_id} style={{
-                  padding: 10,
-                  border: '1px solid #e5e7eb',
-                  borderRadius: 8,
-                  background: u.is_banned ? '#fee2e2' : (u.is_moderator ? '#dbeafe' : 'white'),
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <b>#{u.public_id}</b>
-                      {u.name && <> — <AuthorName name={u.name} /></>}
-                    </div>
-                    <div style={{ fontSize: 11, color: '#666' }}>
-                      {u.is_banned && '🚫 '}
-                      {u.is_moderator && '🛡 '}
-                      {!u.can_post && '✋ '}
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
-                    <button
-                      onClick={() => toggleBan(u.public_id, u.is_banned)}
-                      style={{
-                        padding: '4px 8px', fontSize: 11, borderRadius: 4, border: 'none',
-                        background: u.is_banned ? '#16a34a' : '#dc2626',
-                        color: 'white', cursor: 'pointer',
-                      }}
-                    >{u.is_banned ? 'Разбанить' : 'Забанить'}</button>
-
-                    <button
-                      onClick={() => toggleCanPost(u.public_id, u.can_post)}
-                      style={{
-                        padding: '4px 8px', fontSize: 11, borderRadius: 4, border: 'none',
-                        background: u.can_post ? '#f59e0b' : '#16a34a',
-                        color: 'white', cursor: 'pointer',
-                      }}
-                    >{u.can_post ? 'Запретить метки' : 'Разрешить метки'}</button>
-
-                    <button
-                      onClick={() => toggleModerator(u.public_id, u.is_moderator)}
-                      style={{
-                        padding: '4px 8px', fontSize: 11, borderRadius: 4, border: 'none',
-                        background: u.is_moderator ? '#6b7280' : '#1d9bf0',
-                        color: 'white', cursor: 'pointer',
-                      }}
-                    >{u.is_moderator ? 'Снять модер.' : 'Сделать модер.'}</button>
-                  </div>
-                </div>
-              ))}
-
-              {!usersLoading && users.length === 0 && (
-                <div style={{ color: '#888', fontSize: 13 }}>Пока никого нет</div>
-              )}
-            </div>
-          )}
-
-          {/* === ОБЫЧНАЯ ПАНЕЛЬ ПРОФИЛЯ === */}
-          {!showUsers && (
+          {!showAdminPanel && (
             <>
               <a
                 href="https://t.me/policemap"
@@ -660,7 +559,7 @@ export default function App() {
                 )}
               </div>
 
-              {!isAdmin && (
+              {!isAdmin && !isModerator && (
                 <>
                   <input
                     placeholder="Новое имя"
@@ -674,27 +573,22 @@ export default function App() {
                   <button
                     onClick={saveName}
                     style={{
-                      padding: 10,
-                      borderRadius: 8,
-                      border: 'none',
-                      background: '#111827',
-                      color: 'white',
-                      cursor: 'pointer',
-                      fontSize: 14,
+                      padding: 10, borderRadius: 8, border: 'none',
+                      background: '#111827', color: 'white', cursor: 'pointer', fontSize: 14,
                     }}
                   >Сохранить имя</button>
                 </>
               )}
 
-              {isAdmin && (
+              {(isAdmin || isModerator) && (
                 <div style={{
                   padding: 10,
-                  background: '#fef3c7',
+                  background: isAdmin ? '#fef3c7' : '#dbeafe',
                   borderRadius: 8,
                   fontSize: 13,
-                  color: '#92400e',
+                  color: isAdmin ? '#92400e' : '#1e40af',
                 }}>
-                  Вы вошли как <b>Администратор</b>. Имя нельзя изменить.
+                  Вы вошли как <b>{isAdmin ? 'Администратор' : 'Модератор'}</b>. Имя нельзя изменить.
                 </div>
               )}
 
@@ -714,13 +608,8 @@ export default function App() {
                   <button
                     onClick={adminLogin}
                     style={{
-                      padding: 10,
-                      borderRadius: 8,
-                      border: 'none',
-                      background: '#dc2626',
-                      color: 'white',
-                      cursor: 'pointer',
-                      fontSize: 14,
+                      padding: 10, borderRadius: 8, border: 'none',
+                      background: '#dc2626', color: 'white', cursor: 'pointer', fontSize: 14,
                     }}
                   >Войти как админ</button>
                 </>
@@ -732,41 +621,107 @@ export default function App() {
                   <button
                     onClick={adminDeleteAll}
                     style={{
-                      padding: 10,
-                      borderRadius: 8,
-                      border: 'none',
-                      background: '#dc2626',
-                      color: 'white',
-                      cursor: 'pointer',
-                      fontSize: 14,
+                      padding: 10, borderRadius: 8, border: 'none',
+                      background: '#dc2626', color: 'white', cursor: 'pointer', fontSize: 14,
                     }}
                   >Удалить ВСЕ метки</button>
                   <button
-                    onClick={() => setShowUsers(true)}
+                    onClick={() => setShowAdminPanel(true)}
                     style={{
-                      padding: 10,
-                      borderRadius: 8,
-                      border: 'none',
-                      background: '#1d9bf0',
-                      color: 'white',
-                      cursor: 'pointer',
-                      fontSize: 14,
+                      padding: 10, borderRadius: 8, border: 'none',
+                      background: '#1d9bf0', color: 'white', cursor: 'pointer', fontSize: 14,
                     }}
-                  >👥 Управление пользователями</button>
+                  >🔍 Управление по ID</button>
                   <button
                     onClick={adminLogout}
                     style={{
-                      padding: 10,
-                      borderRadius: 8,
-                      border: '1px solid #d1d5db',
-                      background: 'white',
-                      cursor: 'pointer',
-                      fontSize: 14,
+                      padding: 10, borderRadius: 8, border: '1px solid #d1d5db',
+                      background: 'white', cursor: 'pointer', fontSize: 14,
                     }}
                   >Выйти из админа</button>
                 </>
               )}
             </>
+          )}
+
+          {/* === Управление по ID === */}
+          {showAdminPanel && isAdmin && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <button
+                onClick={() => { setShowAdminPanel(false); setTargetUser(null); setTargetId(''); setSearchError(''); }}
+                style={{
+                  border: 'none', background: 'transparent', color: '#1d9bf0',
+                  cursor: 'pointer', fontSize: 13, textAlign: 'left', padding: 0,
+                }}
+              >← Назад к профилю</button>
+
+              <b>Управление пользователем по ID</b>
+
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  placeholder="Введите ID (например 1005)"
+                  value={targetId}
+                  onChange={e => setTargetId(e.target.value.replace(/\D/g, ''))}
+                  onKeyDown={e => { if (e.key === 'Enter') findUser(); }}
+                  style={{ flex: 1, padding: 10, borderRadius: 8, border: '1px solid #d1d5db', fontSize: 14 }}
+                />
+                <button
+                  onClick={findUser}
+                  style={{
+                    padding: '10px 14px', borderRadius: 8, border: 'none',
+                    background: '#111827', color: 'white', cursor: 'pointer', fontSize: 14,
+                  }}
+                >Найти</button>
+              </div>
+
+              {searchError && <div style={{ color: '#dc2626', fontSize: 13 }}>{searchError}</div>}
+
+              {targetUser && (
+                <div style={{
+                  padding: 12, background: '#f9fafb', borderRadius: 8,
+                  border: '1px solid #e5e7eb',
+                }}>
+                  <div style={{ marginBottom: 6 }}>
+                    <b>ID #{targetUser.public_id}</b>
+                    {targetUser.name && <> — <AuthorName name={targetUser.name} /></>}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#666', marginBottom: 10 }}>
+                    Статус: {targetUser.is_banned ? '🚫 забанен' : '✅ активен'}
+                    {targetUser.is_moderator && ' • 🛡 модератор'}
+                    {!targetUser.can_post && ' • ✋ не может ставить метки'}
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <button
+                      onClick={() => userAction(targetUser.is_banned ? 'unban' : 'ban')}
+                      style={{
+                        padding: 10, borderRadius: 6, border: 'none',
+                        background: targetUser.is_banned ? '#16a34a' : '#dc2626',
+                        color: 'white', cursor: 'pointer', fontSize: 13,
+                      }}
+                    >{targetUser.is_banned ? '✅ Разблокировать' : '🚫 Заблокировать'}</button>
+
+                    <button
+                      onClick={() => userAction(targetUser.can_post ? 'deny_post' : 'allow_post')}
+                      style={{
+                        padding: 10, borderRadius: 6, border: 'none',
+                        background: targetUser.can_post ? '#f59e0b' : '#16a34a',
+                        color: 'white', cursor: 'pointer', fontSize: 13,
+                      }}
+                    >{targetUser.can_post ? '✋ Запретить ставить метки' : '✅ Разрешить ставить метки'}</button>
+
+                    <button
+                      onClick={() => userAction(targetUser.is_moderator ? 'remove_moderator' : 'make_moderator')}
+                      style={{
+                        padding: 10, borderRadius: 6, border: 'none',
+                        background: targetUser.is_moderator ? '#6b7280' : '#1d9bf0',
+                        color: 'white', cursor: 'pointer', fontSize: 13,
+                      }}
+                    >{targetUser.is_moderator ? 'Снять модератора' : '🛡 Сделать модератором'}</button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -791,27 +746,15 @@ export default function App() {
         {pendingType ? (
           <>
             <div style={{
-              padding: '8px 12px',
-              background: '#fef3c7',
-              borderRadius: 8,
-              fontSize: 13,
-              alignSelf: 'center',
-              whiteSpace: 'nowrap',
-              flexShrink: 0,
-            }}>
-              Кликните по карте
-            </div>
+              padding: '8px 12px', background: '#fef3c7', borderRadius: 8,
+              fontSize: 13, alignSelf: 'center', whiteSpace: 'nowrap', flexShrink: 0,
+            }}>Кликните по карте</div>
             <button
               onClick={() => setPendingType(null)}
               style={{
-                padding: '8px 14px',
-                borderRadius: 8,
-                border: 'none',
-                background: '#e5e7eb',
-                cursor: 'pointer',
-                fontSize: 13,
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
+                padding: '8px 14px', borderRadius: 8, border: 'none',
+                background: '#e5e7eb', cursor: 'pointer', fontSize: 13,
+                whiteSpace: 'nowrap', flexShrink: 0,
               }}
             >Отмена</button>
           </>
@@ -822,35 +765,20 @@ export default function App() {
                 key={t.key}
                 onClick={() => setPendingType(t.key)}
                 style={{
-                  padding: '8px 12px',
-                  borderRadius: 8,
-                  border: 'none',
-                  background: '#111827',
-                  color: 'white',
-                  cursor: 'pointer',
-                  fontSize: 13,
-                  fontWeight: 500,
-                  whiteSpace: 'nowrap',
-                  flexShrink: 0,
+                  padding: '8px 12px', borderRadius: 8, border: 'none',
+                  background: '#111827', color: 'white', cursor: 'pointer',
+                  fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', flexShrink: 0,
                 }}
               >{t.label}</button>
             ))}
-            {/* Кнопки только для админа */}
-            {isAdmin && ADMIN_TYPES.map(t => (
+            {canAdminActions && ADMIN_TYPES.map(t => (
               <button
                 key={t.key}
                 onClick={() => setPendingType(t.key)}
                 style={{
-                  padding: '8px 12px',
-                  borderRadius: 8,
-                  border: 'none',
-                  background: '#16a34a',
-                  color: 'white',
-                  cursor: 'pointer',
-                  fontSize: 13,
-                  fontWeight: 500,
-                  whiteSpace: 'nowrap',
-                  flexShrink: 0,
+                  padding: '8px 12px', borderRadius: 8, border: 'none',
+                  background: '#16a34a', color: 'white', cursor: 'pointer',
+                  fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', flexShrink: 0,
                 }}
               >{t.label}</button>
             ))}

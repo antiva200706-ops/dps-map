@@ -51,6 +51,13 @@ const requireDevice = async (req, res, next) => {
   next();
 };
 
+function isAdminOrModerator(req) {
+  const pass = req.header('X-Admin-Password');
+  if (pass === ADMIN_PASSWORD) return 'admin';
+  if (req.user && req.user.is_moderator) return 'moderator';
+  return null;
+}
+
 app.get('/me', requireDevice, (req, res) => {
   res.json({
     id: req.user.id,
@@ -65,6 +72,9 @@ app.get('/me', requireDevice, (req, res) => {
 app.post('/me', requireDevice, async (req, res) => {
   const { name } = req.body;
   if (!name || name.length > 40) return res.status(400).json({ error: 'bad name' });
+  if (req.user.is_moderator) {
+    return res.status(403).json({ error: 'Модератор не может менять имя' });
+  }
   if (isForbiddenName(name)) {
     return res.status(403).json({ error: 'Это имя запрещено' });
   }
@@ -95,12 +105,11 @@ app.get('/markers', requireDevice, async (req, res) => {
 app.post('/markers', requireDevice, async (req, res) => {
   const { lat, lng, type, comment } = req.body;
 
-  // Проверка на бан и запрет постинга
   if (req.user.is_banned) return res.status(403).json({ error: 'Вы заблокированы' });
   if (!req.user.can_post) return res.status(403).json({ error: 'Вам запрещено ставить метки' });
 
   const allowedTypes = ['dps','camera','accident','roadwork'];
-  const adminTypes = ['trafficlight']; // только для админа/модератора
+  const adminTypes = ['trafficlight'];
   const isAdminPass = req.header('X-Admin-Password') === ADMIN_PASSWORD;
   const canPostAdminType = isAdminPass || req.user.is_moderator;
 
@@ -131,7 +140,8 @@ app.post('/markers/:id/vote', requireDevice, async (req, res) => {
 
   if (req.user.is_banned) return res.status(403).json({ error: 'Вы заблокированы' });
 
-  const isAdmin = req.header('X-Admin-Password') === ADMIN_PASSWORD || req.user.is_moderator;
+  const role = isAdminOrModerator(req);
+  const isAdmin = !!role;
 
   const check = await db.query(`SELECT pinned FROM markers WHERE id = $1`, [req.params.id]);
   if (!check.rows.length) return res.status(404).json({ error: 'not found' });
@@ -171,7 +181,24 @@ app.post('/markers/:id/vote', requireDevice, async (req, res) => {
   res.json({ ...m, status });
 });
 
-// --- Админские роуты ---
+// --- Пин и удаление меток: админ ИЛИ модератор ---
+
+app.post('/admin/pin/:id', requireDevice, async (req, res) => {
+  const role = isAdminOrModerator(req);
+  if (!role) return res.status(401).json({ error: 'unauthorized' });
+  const { pinned } = req.body;
+  await db.query(`UPDATE markers SET pinned = $1 WHERE id = $2`, [!!pinned, req.params.id]);
+  res.json({ ok: true });
+});
+
+app.post('/admin/delete/:id', requireDevice, async (req, res) => {
+  const role = isAdminOrModerator(req);
+  if (!role) return res.status(401).json({ error: 'unauthorized' });
+  await db.query(`DELETE FROM markers WHERE id = $1`, [req.params.id]);
+  res.json({ ok: true });
+});
+
+// --- Только админ (по паролю) ---
 
 app.post('/admin/login', async (req, res) => {
   const { password } = req.body;
@@ -187,6 +214,11 @@ app.post('/admin/login', async (req, res) => {
   res.json({ ok: true, name: ADMIN_NAME });
 });
 
+app.post('/admin/logout', requireDevice, async (req, res) => {
+  await db.query(`UPDATE users SET name = NULL WHERE id = $1`, [req.user.id]);
+  res.json({ ok: true });
+});
+
 app.post('/admin/delete-all', async (req, res) => {
   const pass = req.header('X-Admin-Password');
   if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'unauthorized' });
@@ -194,60 +226,47 @@ app.post('/admin/delete-all', async (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/admin/delete/:id', async (req, res) => {
+// Управление пользователем по public_id — одно действие за раз
+app.post('/admin/user/:publicId/action', async (req, res) => {
   const pass = req.header('X-Admin-Password');
   if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'unauthorized' });
-  await db.query(`DELETE FROM markers WHERE id = $1`, [req.params.id]);
-  res.json({ ok: true });
-});
 
-app.post('/admin/pin/:id', async (req, res) => {
-  const pass = req.header('X-Admin-Password');
-  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'unauthorized' });
-  const { pinned } = req.body;
-  await db.query(`UPDATE markers SET pinned = $1 WHERE id = $2`, [!!pinned, req.params.id]);
-  res.json({ ok: true });
-});
+  const { action } = req.body;
+  const publicId = parseInt(req.params.publicId, 10);
+  if (!publicId) return res.status(400).json({ error: 'bad id' });
 
-app.post('/admin/logout', requireDevice, async (req, res) => {
-  await db.query(`UPDATE users SET name = NULL WHERE id = $1`, [req.user.id]);
-  res.json({ ok: true });
-});
+  const check = await db.query(`SELECT * FROM users WHERE public_id = $1`, [publicId]);
+  if (!check.rows.length) return res.status(404).json({ error: 'Пользователь не найден' });
 
-// --- Модерация пользователей (только админ) ---
+  if (action === 'ban') {
+    await db.query(`UPDATE users SET is_banned = true WHERE public_id = $1`, [publicId]);
+  } else if (action === 'unban') {
+    await db.query(`UPDATE users SET is_banned = false WHERE public_id = $1`, [publicId]);
+  } else if (action === 'deny_post') {
+    await db.query(`UPDATE users SET can_post = false WHERE public_id = $1`, [publicId]);
+  } else if (action === 'allow_post') {
+    await db.query(`UPDATE users SET can_post = true WHERE public_id = $1`, [publicId]);
+  } else if (action === 'make_moderator') {
+    await db.query(
+      `UPDATE users SET is_moderator = true, name = $1 WHERE public_id = $2`,
+      [MODERATOR_NAME, publicId]
+    );
+  } else if (action === 'remove_moderator') {
+    await db.query(
+      `UPDATE users SET is_moderator = false, name = NULL WHERE public_id = $1`,
+      [publicId]
+    );
+  } else if (action === 'search') {
+    // ничего не делаем — просто возвращаем данные
+  } else {
+    return res.status(400).json({ error: 'unknown action' });
+  }
 
-app.get('/admin/users', async (req, res) => {
-  const pass = req.header('X-Admin-Password');
-  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'unauthorized' });
-  const { rows } = await db.query(
-    `SELECT public_id, name, is_moderator, is_banned, can_post, created_at
-     FROM users ORDER BY public_id LIMIT 200`
+  const updated = await db.query(
+    `SELECT public_id, name, is_moderator, is_banned, can_post FROM users WHERE public_id = $1`,
+    [publicId]
   );
-  res.json(rows);
-});
-
-app.post('/admin/users/:publicId/ban', async (req, res) => {
-  const pass = req.header('X-Admin-Password');
-  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'unauthorized' });
-  const { ban } = req.body;
-  await db.query(`UPDATE users SET is_banned = $1 WHERE public_id = $2`, [!!ban, req.params.publicId]);
-  res.json({ ok: true });
-});
-
-app.post('/admin/users/:publicId/can-post', async (req, res) => {
-  const pass = req.header('X-Admin-Password');
-  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'unauthorized' });
-  const { can_post } = req.body;
-  await db.query(`UPDATE users SET can_post = $1 WHERE public_id = $2`, [!!can_post, req.params.publicId]);
-  res.json({ ok: true });
-});
-
-app.post('/admin/users/:publicId/moderator', async (req, res) => {
-  const pass = req.header('X-Admin-Password');
-  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'unauthorized' });
-  const { is_moderator } = req.body;
-  await db.query(`UPDATE users SET is_moderator = $1 WHERE public_id = $2`, [!!is_moderator, req.params.publicId]);
-  res.json({ ok: true });
+  res.json({ ok: true, user: updated.rows[0] });
 });
 
 app.get(/.*/, (req, res) => {
