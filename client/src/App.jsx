@@ -5,6 +5,7 @@ import axios from 'axios';
 import 'leaflet/dist/leaflet.css';
 
 const API = '';
+const ADMIN_NAME = 'Администратор';
 
 function makeIcon(emoji, color, pinned) {
   const ring = pinned ? '3px solid #facc15' : '2px solid white';
@@ -95,6 +96,29 @@ function timeAgo(iso) {
   if (min < 60) return `${min} мин назад`;
   const h = Math.floor(min / 60);
   return `${h} ч назад`;
+}
+
+// Компонент имени автора с галочкой для админа
+function AuthorName({ name }) {
+  const displayName = name || 'Аноним';
+  const isAdmin = displayName === ADMIN_NAME;
+  return (
+    <span style={{
+      color: isAdmin ? '#dc2626' : '#555',
+      fontWeight: isAdmin ? 600 : 400,
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 4,
+    }}>
+      {displayName}
+      {isAdmin && (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="11" fill="#1d9bf0" />
+          <path d="M7 12.5l3.2 3.2L17 9" stroke="white" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+        </svg>
+      )}
+    </span>
+  );
 }
 
 function MapRef({ onReady }) {
@@ -196,7 +220,9 @@ export default function App() {
       setProfileName(nameInput.trim());
       setNameInput('');
       loadMarkers();
-    } catch (e) { alert('Ошибка сохранения'); }
+    } catch (e) {
+      alert(e.response?.data?.error || 'Ошибка сохранения');
+    }
   }
 
   async function adminLogin() {
@@ -206,11 +232,23 @@ export default function App() {
         setIsAdmin(true);
         setAdminPassword(adminPass);
         setAdminPass('');
-        alert('Добро пожаловать, админ');
+        setProfileName(ADMIN_NAME);
+        loadMarkers();
+        alert('Добро пожаловать, администратор');
       }
     } catch (e) {
       alert('Неверный пароль');
     }
+  }
+
+  async function adminLogout() {
+    try {
+      await api.post('/admin/logout');
+    } catch (e) {}
+    setIsAdmin(false);
+    setAdminPassword('');
+    setProfileName('Аноним');
+    loadMarkers();
   }
 
   async function adminDeleteAll() {
@@ -296,8 +334,8 @@ export default function App() {
               <div style={{ minWidth: 220 }}>
                 <b>{TYPES.find(t => t.key === m.type)?.label || m.type}</b>
                 <br />
-                <small style={{ color: '#555' }}>
-                  от: {m.author_name || 'Аноним'}
+                <small>
+                  от: <AuthorName name={m.author_name} />
                 </small>
                 <br />
                 {m.comment && <><i>{m.comment}</i><br /></>}
@@ -361,7 +399,6 @@ export default function App() {
         ))}
       </MapContainer>
 
-      {/* Кнопка меню */}
       <div
         onClick={() => setShowProfile(true)}
         style={{
@@ -407,7 +444,6 @@ export default function App() {
             >×</button>
           </div>
 
-          {/* Кнопка Telegram */}
           <a
             href="https://t.me/policemap"
             target="_blank"
@@ -430,28 +466,46 @@ export default function App() {
           </a>
 
           <div style={{ padding: 10, background: '#f3f4f6', borderRadius: 8 }}>
-            Имя: <b>{profileName}</b>
+            Имя: <AuthorName name={profileName} />
           </div>
 
-          <input
-            placeholder="Новое имя"
-            value={nameInput}
-            onChange={e => setNameInput(e.target.value)}
-            style={{ padding: 10, borderRadius: 8, border: '1px solid #d1d5db', fontSize: 14 }}
-          />
+          {!isAdmin && (
+            <>
+              <input
+                placeholder="Новое имя"
+                value={nameInput}
+                onChange={e => setNameInput(e.target.value)}
+                style={{ padding: 10, borderRadius: 8, border: '1px solid #d1d5db', fontSize: 14 }}
+              />
+              <div style={{ fontSize: 11, color: '#888', marginTop: -6 }}>
+                Нельзя: админ, администратор, владелец, создатель, модератор
+              </div>
+              <button
+                onClick={saveName}
+                style={{
+                  padding: 10,
+                  borderRadius: 8,
+                  border: 'none',
+                  background: '#111827',
+                  color: 'white',
+                  cursor: 'pointer',
+                  fontSize: 14,
+                }}
+              >Сохранить имя</button>
+            </>
+          )}
 
-          <button
-            onClick={saveName}
-            style={{
+          {isAdmin && (
+            <div style={{
               padding: 10,
+              background: '#fef3c7',
               borderRadius: 8,
-              border: 'none',
-              background: '#111827',
-              color: 'white',
-              cursor: 'pointer',
-              fontSize: 14,
-            }}
-          >Сохранить имя</button>
+              fontSize: 13,
+              color: '#92400e',
+            }}>
+              Вы вошли как <b>Администратор</b>. Имя нельзя изменить.
+            </div>
+          )}
 
           <hr style={{ margin: '12px 0', border: 'none', borderTop: '1px solid #e5e7eb' }} />
 
@@ -482,7 +536,7 @@ export default function App() {
           ) : (
             <>
               <div style={{ color: '#16a34a', fontWeight: 600 }}>
-                ✅ Вы вошли как админ
+                ✅ Вы вошли как Администратор
               </div>
               <button
                 onClick={adminDeleteAll}
@@ -497,7 +551,7 @@ export default function App() {
                 }}
               >Удалить ВСЕ метки</button>
               <button
-                onClick={() => { setIsAdmin(false); setAdminPassword(''); }}
+                onClick={adminLogout}
                 style={{
                   padding: 10,
                   borderRadius: 8,
@@ -512,7 +566,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Нижняя панель с кнопками */}
       <div style={{
         position: 'fixed',
         bottom: 0, left: 0, right: 0,

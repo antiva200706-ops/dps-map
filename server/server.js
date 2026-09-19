@@ -15,6 +15,21 @@ app.use(express.json());
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const ADMIN_PASSWORD = 'Anton2104kill';
+const ADMIN_NAME = 'Администратор';
+
+// Запрещённые имена (в любом регистре)
+const FORBIDDEN_NAMES = [
+  'админ', 'администратор', 'создатель', 'владелец',
+  'admin', 'administrator', 'owner', 'creator',
+  'модератор', 'moderator', 'мод', 'mod',
+  'официальный', 'official', 'support', 'саппорт',
+];
+
+function isForbiddenName(name) {
+  if (!name) return false;
+  const low = name.toLowerCase().trim();
+  return FORBIDDEN_NAMES.some(f => low === f || low.includes(f));
+}
 
 const clientDist = path.join(__dirname, '..', 'client', 'dist');
 app.use(express.static(clientDist));
@@ -43,6 +58,9 @@ app.get('/me', requireDevice, (req, res) => {
 app.post('/me', requireDevice, async (req, res) => {
   const { name } = req.body;
   if (!name || name.length > 40) return res.status(400).json({ error: 'bad name' });
+  if (isForbiddenName(name)) {
+    return res.status(403).json({ error: 'Это имя запрещено' });
+  }
   const { rows } = await db.query(
     `UPDATE users SET name = $1 WHERE id = $2 RETURNING id, name`,
     [name, req.user.id]
@@ -126,10 +144,22 @@ app.post('/markers/:id/vote', requireDevice, async (req, res) => {
   res.json({ ...m, status });
 });
 
-app.post('/admin/login', (req, res) => {
+// --- Админские роуты ---
+
+// Вход админа — автоматически ставит ему имя "Администратор"
+app.post('/admin/login', async (req, res) => {
   const { password } = req.body;
-  if (password === ADMIN_PASSWORD) return res.json({ ok: true });
-  res.status(401).json({ ok: false });
+  const deviceId = req.header('X-Device-Id');
+  if (!deviceId) return res.status(400).json({ error: 'no device id' });
+  if (password !== ADMIN_PASSWORD) return res.status(401).json({ ok: false });
+
+  // Ставим админу официальное имя
+  const u = await getOrCreateUser(deviceId);
+  await db.query(
+    `UPDATE users SET name = $1 WHERE id = $2`,
+    [ADMIN_NAME, u.id]
+  );
+  res.json({ ok: true, name: ADMIN_NAME });
 });
 
 app.post('/admin/delete-all', async (req, res) => {
@@ -151,6 +181,12 @@ app.post('/admin/pin/:id', async (req, res) => {
   if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'unauthorized' });
   const { pinned } = req.body;
   await db.query(`UPDATE markers SET pinned = $1 WHERE id = $2`, [!!pinned, req.params.id]);
+  res.json({ ok: true });
+});
+
+// Выход из админа — сбрасываем имя обратно
+app.post('/admin/logout', requireDevice, async (req, res) => {
+  await db.query(`UPDATE users SET name = NULL WHERE id = $1`, [req.user.id]);
   res.json({ ok: true });
 });
 
