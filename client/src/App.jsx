@@ -6,7 +6,8 @@ import 'leaflet/dist/leaflet.css';
 
 const API = '';
 
-function makeIcon(emoji, color) {
+function makeIcon(emoji, color, pinned) {
+  const ring = pinned ? '3px solid #facc15' : '2px solid white';
   return L.divIcon({
     className: 'custom-marker',
     html: `<div style="
@@ -15,7 +16,7 @@ function makeIcon(emoji, color) {
       border-radius:50% 50% 50% 0;
       transform:rotate(-45deg);
       display:flex;align-items:center;justify-content:center;
-      border:2px solid white;
+      border:${ring};
       box-shadow:0 2px 6px rgba(0,0,0,0.4);
     ">
       <span style="transform:rotate(45deg);font-size:18px;">${emoji}</span>
@@ -26,15 +27,22 @@ function makeIcon(emoji, color) {
   });
 }
 
-const ICONS = {
-  dps:      makeIcon('🚓', '#e11d48'),
-  camera:   makeIcon('📷', '#f59e0b'),
-  accident: makeIcon('💥', '#dc2626'),
-  roadwork: makeIcon('🚧', '#2563eb'),
+const BASE_ICONS = {
+  dps:      makeIcon('🚓', '#e11d48', false),
+  camera:   makeIcon('📷', '#f59e0b', false),
+  accident: makeIcon('💥', '#dc2626', false),
+  roadwork: makeIcon('🚧', '#2563eb', false),
+};
+
+const PINNED_ICONS = {
+  dps:      makeIcon('🚓', '#e11d48', true),
+  camera:   makeIcon('📷', '#f59e0b', true),
+  accident: makeIcon('💥', '#dc2626', true),
+  roadwork: makeIcon('🚧', '#2563eb', true),
 };
 
 const TYPES = [
-  { key: 'dps',      label: '🚓 Тут ДПС' },
+  { key: 'dps',      label: '🚓 ДПС' },
   { key: 'camera',   label: '📷 Камера' },
   { key: 'accident', label: '💥 Авария' },
   { key: 'roadwork', label: '🚧 Ремонт' },
@@ -230,6 +238,17 @@ export default function App() {
     }
   }
 
+  async function adminPin(id, pinned) {
+    try {
+      await api.post(`/admin/pin/${id}`, { pinned }, {
+        headers: { 'X-Admin-Password': adminPassword }
+      });
+      loadMarkers();
+    } catch (e) {
+      alert('Ошибка: ' + (e.response?.data?.error || e.message));
+    }
+  }
+
   useEffect(() => {
     api.get('/me').then(r => {
       if (r.data.name) setProfileName(r.data.name);
@@ -268,9 +287,13 @@ export default function App() {
         {me && <Marker position={[me.lat, me.lng]} icon={MY_ICON} />}
 
         {markers.map(m => (
-          <Marker key={m.id} position={[m.lat, m.lng]} icon={ICONS[m.type] || ICONS.dps}>
+          <Marker
+            key={m.id}
+            position={[m.lat, m.lng]}
+            icon={m.pinned ? PINNED_ICONS[m.type] : (BASE_ICONS[m.type] || BASE_ICONS.dps)}
+          >
             <Popup>
-              <div style={{ minWidth: 200 }}>
+              <div style={{ minWidth: 220 }}>
                 <b>{TYPES.find(t => t.key === m.type)?.label || m.type}</b>
                 <br />
                 <small style={{ color: '#555' }}>
@@ -278,21 +301,47 @@ export default function App() {
                 </small>
                 <br />
                 {m.comment && <><i>{m.comment}</i><br /></>}
-                <small style={{ color: '#888' }}>{timeAgo(m.created_at)}</small>
+                <small style={{ color: '#888' }}>
+                  {m.pinned ? '📌 закреплено' : timeAgo(m.created_at)}
+                </small>
                 <br />
                 <div style={{ margin: '6px 0' }}>
                   👍 {m.confirm_votes} &nbsp; 👎 {m.reject_votes}
                 </div>
-                <button
-                  onClick={() => vote(m.id, 1)}
-                  style={{ marginRight: 6, padding: '4px 10px', cursor: 'pointer' }}
-                >Подтвердить</button>
-                <button
-                  onClick={() => vote(m.id, -1)}
-                  style={{ padding: '4px 10px', cursor: 'pointer' }}
-                >Опровергнуть</button>
+
+                {!m.pinned && (
+                  <>
+                    <button
+                      onClick={() => vote(m.id, 1)}
+                      style={{ marginRight: 6, padding: '4px 10px', cursor: 'pointer' }}
+                    >Подтвердить</button>
+                    <button
+                      onClick={() => vote(m.id, -1)}
+                      style={{ padding: '4px 10px', cursor: 'pointer' }}
+                    >Опровергнуть</button>
+                  </>
+                )}
+
+                {m.pinned && (
+                  <div style={{ margin: '6px 0', color: '#dc2626', fontWeight: 600 }}>
+                    📌 Закреплено (голосование отключено)
+                  </div>
+                )}
+
                 {isAdmin && (
-                  <div style={{ marginTop: 6 }}>
+                  <div style={{ marginTop: 8 }}>
+                    <button
+                      onClick={() => adminPin(m.id, !m.pinned)}
+                      style={{
+                        padding: '4px 10px',
+                        marginRight: 6,
+                        cursor: 'pointer',
+                        background: m.pinned ? '#6b7280' : '#16a34a',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: 4,
+                      }}
+                    >{m.pinned ? 'Открепить' : '📌 Закрепить'}</button>
                     <button
                       onClick={() => adminDeleteOne(m.id)}
                       style={{
@@ -303,7 +352,7 @@ export default function App() {
                         border: 'none',
                         borderRadius: 4,
                       }}
-                    >Удалить (админ)</button>
+                    >Удалить</button>
                   </div>
                 )}
               </div>
@@ -312,27 +361,35 @@ export default function App() {
         ))}
       </MapContainer>
 
+      {/* Кнопка меню */}
       <div
         onClick={() => setShowProfile(true)}
         style={{
           position: 'absolute',
           top: 12, right: 12,
           background: 'white',
-          padding: '8px 12px',
+          padding: '8px 14px',
           borderRadius: 8,
           boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
           cursor: 'pointer',
-          fontSize: 20,
+          fontSize: 16,
           zIndex: 1000,
           userSelect: 'none',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
         }}
-      >⋮</div>
+      >
+        <span style={{ fontWeight: 500 }}>Меню</span>
+        <span style={{ fontSize: 20, lineHeight: 1 }}>⋮</span>
+      </div>
 
       {showProfile && (
         <div style={{
           position: 'absolute',
           top: 0, right: 0, bottom: 0,
           width: 320,
+          maxWidth: '90vw',
           background: 'white',
           boxShadow: '-2px 0 12px rgba(0,0,0,0.2)',
           padding: 20,
@@ -433,38 +490,48 @@ export default function App() {
         </div>
       )}
 
+      {/* Нижняя панель с кнопками */}
       <div style={{
-        position: 'absolute',
+        position: 'fixed',
         bottom: 0, left: 0, right: 0,
-        padding: 12,
+        padding: '10px 12px',
+        paddingBottom: 'max(10px, env(safe-area-inset-bottom))',
         background: 'white',
         boxShadow: '0 -2px 10px rgba(0,0,0,0.15)',
         display: 'flex',
         gap: 8,
         justifyContent: 'center',
         zIndex: 1000,
-        flexWrap: 'wrap',
+        flexWrap: 'nowrap',
+        overflowX: 'auto',
+        overflowY: 'hidden',
+        WebkitOverflowScrolling: 'touch',
+        scrollbarWidth: 'none',
       }}>
         {pendingType ? (
           <>
             <div style={{
-              padding: '10px 14px',
+              padding: '8px 12px',
               background: '#fef3c7',
               borderRadius: 8,
-              fontSize: 14,
+              fontSize: 13,
               alignSelf: 'center',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
             }}>
-              Кликните по карте, чтобы поставить метку
+              Кликните по карте
             </div>
             <button
               onClick={() => setPendingType(null)}
               style={{
-                padding: '10px 16px',
+                padding: '8px 14px',
                 borderRadius: 8,
                 border: 'none',
                 background: '#e5e7eb',
                 cursor: 'pointer',
-                fontSize: 14,
+                fontSize: 13,
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
               }}
             >Отмена</button>
           </>
@@ -474,14 +541,16 @@ export default function App() {
               key={t.key}
               onClick={() => setPendingType(t.key)}
               style={{
-                padding: '10px 16px',
+                padding: '8px 12px',
                 borderRadius: 8,
                 border: 'none',
                 background: '#111827',
                 color: 'white',
                 cursor: 'pointer',
-                fontSize: 14,
+                fontSize: 13,
                 fontWeight: 500,
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
               }}
             >{t.label}</button>
           ))

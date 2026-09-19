@@ -16,11 +16,9 @@ const db = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const ADMIN_PASSWORD = 'Anton2104kill';
 
-// --- СНАЧАЛА отдаём статику фронта (без проверки device_id) ---
 const clientDist = path.join(__dirname, '..', 'client', 'dist');
 app.use(express.static(clientDist));
 
-// --- Потом API с проверкой device_id ---
 async function getOrCreateUser(deviceId) {
   const { rows } = await db.query(
     `INSERT INTO users (device_id) VALUES ($1)
@@ -59,11 +57,11 @@ app.get('/markers', requireDevice, async (req, res) => {
     `SELECT m.id, m.type, ST_Y(m.location::geometry) AS lat,
             ST_X(m.location::geometry) AS lng, m.comment,
             m.confirm_votes, m.reject_votes, m.status, m.created_at,
+            m.pinned, m.expires_at,
             u.name AS author_name
      FROM markers m
      LEFT JOIN users u ON u.id = m.user_id
-     WHERE m.status IN ('pending','active')
-       AND m.expires_at > now()
+     WHERE (m.status IN ('pending','active') AND m.expires_at > now() OR m.pinned = true)
        AND ST_DWithin(m.location, ST_MakePoint($1,$2)::geography, $3)`,
     [lng, lat, radius]
   );
@@ -90,6 +88,12 @@ app.post('/markers/:id/vote', requireDevice, async (req, res) => {
 
   const isAdmin = req.header('X-Admin-Password') === ADMIN_PASSWORD;
 
+  const check = await db.query(`SELECT pinned FROM markers WHERE id = $1`, [req.params.id]);
+  if (!check.rows.length) return res.status(404).json({ error: 'not found' });
+  if (check.rows[0].pinned && !isAdmin) {
+    return res.status(403).json({ error: 'pinned marker, voting disabled' });
+  }
+
   if (!isAdmin) {
     try {
       await db.query(
@@ -106,23 +110,22 @@ app.post('/markers/:id/vote', requireDevice, async (req, res) => {
        confirm_votes = confirm_votes + CASE WHEN $1 = 1 THEN 1 ELSE 0 END,
        reject_votes  = reject_votes  + CASE WHEN $1 = -1 THEN 1 ELSE 0 END
      WHERE id = $2
-     RETURNING confirm_votes, reject_votes`,
+     RETURNING confirm_votes, reject_votes, pinned`,
     [value, req.params.id]
   );
 
-  if (!rows.length) return res.status(404).json({ error: 'not found' });
-
   const m = rows[0];
   let status = null;
-  if (m.confirm_votes >= 3 && m.confirm_votes > m.reject_votes) status = 'active';
-  if (m.reject_votes >= 3) status = 'rejected';
+  if (!m.pinned) {
+    if (m.confirm_votes >= 3 && m.confirm_votes > m.reject_votes) status = 'active';
+    if (m.reject_votes >= 3) status = 'rejected';
+  }
   if (status) {
     await db.query(`UPDATE markers SET status = $1 WHERE id = $2`, [status, req.params.id]);
   }
   res.json({ ...m, status });
 });
 
-// --- Админские роуты (без requireDevice, по паролю) ---
 app.post('/admin/login', (req, res) => {
   const { password } = req.body;
   if (password === ADMIN_PASSWORD) return res.json({ ok: true });
@@ -143,7 +146,14 @@ app.post('/admin/delete/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-// --- Всё остальное — SPA-роутинг (отдаём index.html) ---
+app.post('/admin/pin/:id', async (req, res) => {
+  const pass = req.header('X-Admin-Password');
+  if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'unauthorized' });
+  const { pinned } = req.body;
+  await db.query(`UPDATE markers SET pinned = $1 WHERE id = $2`, [!!pinned, req.params.id]);
+  res.json({ ok: true });
+});
+
 app.get(/.*/, (req, res) => {
   res.sendFile(path.join(clientDist, 'index.html'));
 });
