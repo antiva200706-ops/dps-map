@@ -6,6 +6,7 @@ import 'leaflet/dist/leaflet.css';
 
 const API = '';
 const ADMIN_NAME = 'Администратор';
+const MODERATOR_NAME = 'Модератор';
 
 function makeIcon(emoji, color, pinned) {
   const ring = pinned ? '3px solid #facc15' : '2px solid white';
@@ -29,17 +30,19 @@ function makeIcon(emoji, color, pinned) {
 }
 
 const BASE_ICONS = {
-  dps:      makeIcon('🚓', '#e11d48', false),
-  camera:   makeIcon('📷', '#f59e0b', false),
-  accident: makeIcon('💥', '#dc2626', false),
-  roadwork: makeIcon('🚧', '#2563eb', false),
+  dps:          makeIcon('🚓', '#e11d48', false),
+  camera:       makeIcon('📷', '#f59e0b', false),
+  accident:     makeIcon('💥', '#dc2626', false),
+  roadwork:     makeIcon('🚧', '#2563eb', false),
+  trafficlight: makeIcon('🚦', '#16a34a', false),
 };
 
 const PINNED_ICONS = {
-  dps:      makeIcon('🚓', '#e11d48', true),
-  camera:   makeIcon('📷', '#f59e0b', true),
-  accident: makeIcon('💥', '#dc2626', true),
-  roadwork: makeIcon('🚧', '#2563eb', true),
+  dps:          makeIcon('🚓', '#e11d48', true),
+  camera:       makeIcon('📷', '#f59e0b', true),
+  accident:     makeIcon('💥', '#dc2626', true),
+  roadwork:     makeIcon('🚧', '#2563eb', true),
+  trafficlight: makeIcon('🚦', '#16a34a', true),
 };
 
 const TYPES = [
@@ -48,6 +51,18 @@ const TYPES = [
   { key: 'accident', label: '💥 Авария' },
   { key: 'roadwork', label: '🚧 Ремонт' },
 ];
+
+const ADMIN_TYPES = [
+  { key: 'trafficlight', label: '🚦 Светофор' },
+];
+
+const TYPE_LABELS = {
+  dps: '🚓 ДПС',
+  camera: '📷 Камера',
+  accident: '💥 Авария',
+  roadwork: '🚧 Ремонт',
+  trafficlight: '🚦 Светофор',
+};
 
 const MY_ICON = L.divIcon({
   className: '',
@@ -98,22 +113,29 @@ function timeAgo(iso) {
   return `${h} ч назад`;
 }
 
-// Компонент имени автора с галочкой для админа
+// Имя автора с галочками для админа / модератора
 function AuthorName({ name }) {
   const displayName = name || 'Аноним';
   const isAdmin = displayName === ADMIN_NAME;
+  const isModerator = displayName === MODERATOR_NAME;
+  let color = '#555';
+  let weight = 400;
+  let badgeColor = null;
+  if (isAdmin) { color = '#dc2626'; weight = 600; badgeColor = '#1d9bf0'; }
+  if (isModerator) { color = '#1d9bf0'; weight = 600; badgeColor = '#1d9bf0'; }
+
   return (
     <span style={{
-      color: isAdmin ? '#dc2626' : '#555',
-      fontWeight: isAdmin ? 600 : 400,
+      color,
+      fontWeight: weight,
       display: 'inline-flex',
       alignItems: 'center',
       gap: 4,
     }}>
       {displayName}
-      {isAdmin && (
+      {badgeColor && (
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-          <circle cx="12" cy="12" r="11" fill="#1d9bf0" />
+          <circle cx="12" cy="12" r="11" fill={badgeColor} />
           <path d="M7 12.5l3.2 3.2L17 9" stroke="white" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
         </svg>
       )}
@@ -166,12 +188,18 @@ export default function App() {
   const [pendingType, setPendingType] = useState(null);
 
   const [profileName, setProfileName] = useState('Аноним');
+  const [profileId, setProfileId] = useState(null);
   const [showProfile, setShowProfile] = useState(false);
   const [nameInput, setNameInput] = useState('');
 
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminPass, setAdminPass] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
+
+  // Новые состояния для управления пользователями
+  const [showUsers, setShowUsers] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [usersLoading, setUsersLoading] = useState(false);
 
   const mapRef = useRef(null);
   const lastCenterRef = useRef(center);
@@ -193,7 +221,10 @@ export default function App() {
 
   async function addMarker(m) {
     try {
-      await api.post('/markers', m);
+      const headers = isAdmin && adminPassword
+        ? { 'X-Admin-Password': adminPassword }
+        : {};
+      await api.post('/markers', m, { headers });
       setPendingType(null);
       loadMarkers();
     } catch (e) {
@@ -234,6 +265,11 @@ export default function App() {
         setAdminPass('');
         setProfileName(ADMIN_NAME);
         loadMarkers();
+        // Обновим профиль (для public_id)
+        api.get('/me').then(r => {
+          if (r.data.name) setProfileName(r.data.name);
+          if (r.data.public_id) setProfileId(r.data.public_id);
+        }).catch(() => {});
         alert('Добро пожаловать, администратор');
       }
     } catch (e) {
@@ -248,6 +284,7 @@ export default function App() {
     setIsAdmin(false);
     setAdminPassword('');
     setProfileName('Аноним');
+    setShowUsers(false);
     loadMarkers();
   }
 
@@ -287,9 +324,52 @@ export default function App() {
     }
   }
 
+  // Загрузка списка пользователей
+  async function loadUsers() {
+    setUsersLoading(true);
+    try {
+      const { data } = await api.get('/admin/users', {
+        headers: { 'X-Admin-Password': adminPassword }
+      });
+      setUsers(data);
+    } catch (e) {
+      alert('Ошибка загрузки: ' + (e.response?.data?.error || e.message));
+    } finally {
+      setUsersLoading(false);
+    }
+  }
+
+  async function toggleBan(publicId, current) {
+    try {
+      await api.post(`/admin/users/${publicId}/ban`, { ban: !current }, {
+        headers: { 'X-Admin-Password': adminPassword }
+      });
+      loadUsers();
+    } catch (e) { alert('Ошибка'); }
+  }
+
+  async function toggleCanPost(publicId, current) {
+    try {
+      await api.post(`/admin/users/${publicId}/can-post`, { can_post: !current }, {
+        headers: { 'X-Admin-Password': adminPassword }
+      });
+      loadUsers();
+    } catch (e) { alert('Ошибка'); }
+  }
+
+  async function toggleModerator(publicId, current) {
+    try {
+      await api.post(`/admin/users/${publicId}/moderator`, { is_moderator: !current }, {
+        headers: { 'X-Admin-Password': adminPassword }
+      });
+      loadUsers();
+    } catch (e) { alert('Ошибка'); }
+  }
+
   useEffect(() => {
     api.get('/me').then(r => {
       if (r.data.name) setProfileName(r.data.name);
+      if (r.data.public_id) setProfileId(r.data.public_id);
     }).catch(() => {});
 
     navigator.geolocation.getCurrentPosition(
@@ -305,6 +385,11 @@ export default function App() {
     const refresh = setInterval(() => loadMarkers(), 20000);
     return () => clearInterval(refresh);
   }, []);
+
+  // Когда открывается вкладка пользователей — грузим список
+  useEffect(() => {
+    if (showUsers && isAdmin) loadUsers();
+  }, [showUsers, isAdmin]);
 
   return (
     <div style={{ height: '100vh', width: '100%', position: 'relative' }}>
@@ -332,11 +417,19 @@ export default function App() {
           >
             <Popup>
               <div style={{ minWidth: 220 }}>
-                <b>{TYPES.find(t => t.key === m.type)?.label || m.type}</b>
+                <b>{TYPE_LABELS[m.type] || m.type}</b>
                 <br />
                 <small>
                   от: <AuthorName name={m.author_name} />
                 </small>
+                {isAdmin && m.author_public_id && (
+                  <>
+                    <br />
+                    <small style={{ color: '#888' }}>
+                      ID автора: <b>#{m.author_public_id}</b>
+                    </small>
+                  </>
+                )}
                 <br />
                 {m.comment && <><i>{m.comment}</i><br /></>}
                 <small style={{ color: '#888' }}>
@@ -425,8 +518,8 @@ export default function App() {
         <div style={{
           position: 'absolute',
           top: 0, right: 0, bottom: 0,
-          width: 320,
-          maxWidth: '90vw',
+          width: 340,
+          maxWidth: '92vw',
           background: 'white',
           boxShadow: '-2px 0 12px rgba(0,0,0,0.2)',
           padding: 20,
@@ -437,130 +530,242 @@ export default function App() {
           overflowY: 'auto',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <b style={{ fontSize: 18 }}>Профиль</b>
-            <button
-              onClick={() => setShowProfile(false)}
-              style={{ border: 'none', background: 'transparent', fontSize: 22, cursor: 'pointer' }}
-            >×</button>
-          </div>
-
-          <a
-            href="https://t.me/policemap"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-              padding: 12,
-              borderRadius: 8,
-              background: '#229ED9',
-              color: 'white',
-              textDecoration: 'none',
-              fontSize: 15,
-              fontWeight: 600,
-            }}
-          >
-            <span style={{ fontSize: 18 }}>✈️</span> Мы в Telegram
-          </a>
-
-          <div style={{ padding: 10, background: '#f3f4f6', borderRadius: 8 }}>
-            Имя: <AuthorName name={profileName} />
-          </div>
-
-          {!isAdmin && (
-            <>
-              <input
-                placeholder="Новое имя"
-                value={nameInput}
-                onChange={e => setNameInput(e.target.value)}
-                style={{ padding: 10, borderRadius: 8, border: '1px solid #d1d5db', fontSize: 14 }}
-              />
-              <div style={{ fontSize: 11, color: '#888', marginTop: -6 }}>
-                Нельзя: админ, администратор, владелец, создатель, модератор
-              </div>
+            <b style={{ fontSize: 18 }}>
+              {showUsers ? 'Пользователи' : 'Профиль'}
+            </b>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {isAdmin && (
+                <button
+                  onClick={() => setShowUsers(!showUsers)}
+                  style={{
+                    border: 'none',
+                    background: showUsers ? '#dc2626' : '#111827',
+                    color: 'white',
+                    padding: '6px 10px',
+                    borderRadius: 6,
+                    cursor: 'pointer',
+                    fontSize: 12,
+                  }}
+                >{showUsers ? '← Назад' : '👥 Юзеры'}</button>
+              )}
               <button
-                onClick={saveName}
-                style={{
-                  padding: 10,
-                  borderRadius: 8,
-                  border: 'none',
-                  background: '#111827',
-                  color: 'white',
-                  cursor: 'pointer',
-                  fontSize: 14,
-                }}
-              >Сохранить имя</button>
-            </>
-          )}
+                onClick={() => { setShowProfile(false); setShowUsers(false); }}
+                style={{ border: 'none', background: 'transparent', fontSize: 22, cursor: 'pointer' }}
+              >×</button>
+            </div>
+          </div>
 
-          {isAdmin && (
-            <div style={{
-              padding: 10,
-              background: '#fef3c7',
-              borderRadius: 8,
-              fontSize: 13,
-              color: '#92400e',
-            }}>
-              Вы вошли как <b>Администратор</b>. Имя нельзя изменить.
+          {/* === ВКЛАДКА ПОЛЬЗОВАТЕЛЕЙ === */}
+          {showUsers && isAdmin && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button
+                onClick={loadUsers}
+                style={{
+                  padding: 8, borderRadius: 6, border: 'none',
+                  background: '#111827', color: 'white', cursor: 'pointer', fontSize: 13,
+                }}
+              >🔄 Обновить список</button>
+
+              {usersLoading && <div style={{ color: '#888' }}>Загрузка...</div>}
+
+              {users.map(u => (
+                <div key={u.public_id} style={{
+                  padding: 10,
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 8,
+                  background: u.is_banned ? '#fee2e2' : (u.is_moderator ? '#dbeafe' : 'white'),
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <b>#{u.public_id}</b>
+                      {u.name && <> — <AuthorName name={u.name} /></>}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#666' }}>
+                      {u.is_banned && '🚫 '}
+                      {u.is_moderator && '🛡 '}
+                      {!u.can_post && '✋ '}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => toggleBan(u.public_id, u.is_banned)}
+                      style={{
+                        padding: '4px 8px', fontSize: 11, borderRadius: 4, border: 'none',
+                        background: u.is_banned ? '#16a34a' : '#dc2626',
+                        color: 'white', cursor: 'pointer',
+                      }}
+                    >{u.is_banned ? 'Разбанить' : 'Забанить'}</button>
+
+                    <button
+                      onClick={() => toggleCanPost(u.public_id, u.can_post)}
+                      style={{
+                        padding: '4px 8px', fontSize: 11, borderRadius: 4, border: 'none',
+                        background: u.can_post ? '#f59e0b' : '#16a34a',
+                        color: 'white', cursor: 'pointer',
+                      }}
+                    >{u.can_post ? 'Запретить метки' : 'Разрешить метки'}</button>
+
+                    <button
+                      onClick={() => toggleModerator(u.public_id, u.is_moderator)}
+                      style={{
+                        padding: '4px 8px', fontSize: 11, borderRadius: 4, border: 'none',
+                        background: u.is_moderator ? '#6b7280' : '#1d9bf0',
+                        color: 'white', cursor: 'pointer',
+                      }}
+                    >{u.is_moderator ? 'Снять модер.' : 'Сделать модер.'}</button>
+                  </div>
+                </div>
+              ))}
+
+              {!usersLoading && users.length === 0 && (
+                <div style={{ color: '#888', fontSize: 13 }}>Пока никого нет</div>
+              )}
             </div>
           )}
 
-          <hr style={{ margin: '12px 0', border: 'none', borderTop: '1px solid #e5e7eb' }} />
-
-          <b>Админ-панель</b>
-
-          {!isAdmin ? (
+          {/* === ОБЫЧНАЯ ПАНЕЛЬ ПРОФИЛЯ === */}
+          {!showUsers && (
             <>
-              <input
-                type="password"
-                placeholder="Пароль"
-                value={adminPass}
-                onChange={e => setAdminPass(e.target.value)}
-                style={{ padding: 10, borderRadius: 8, border: '1px solid #d1d5db', fontSize: 14 }}
-              />
-              <button
-                onClick={adminLogin}
+              <a
+                href="https://t.me/policemap"
+                target="_blank"
+                rel="noopener noreferrer"
                 style={{
-                  padding: 10,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                  padding: 12,
                   borderRadius: 8,
-                  border: 'none',
-                  background: '#dc2626',
+                  background: '#229ED9',
                   color: 'white',
-                  cursor: 'pointer',
-                  fontSize: 14,
+                  textDecoration: 'none',
+                  fontSize: 15,
+                  fontWeight: 600,
                 }}
-              >Войти как админ</button>
-            </>
-          ) : (
-            <>
-              <div style={{ color: '#16a34a', fontWeight: 600 }}>
-                ✅ Вы вошли как Администратор
+              >
+                <span style={{ fontSize: 18 }}>✈️</span> Мы в Telegram
+              </a>
+
+              <div style={{ padding: 10, background: '#f3f4f6', borderRadius: 8 }}>
+                Имя: <AuthorName name={profileName} />
+                {profileId && (
+                  <>
+                    <br />
+                    <span style={{ fontSize: 12, color: '#666' }}>
+                      Ваш ID: <b>#{profileId}</b>
+                    </span>
+                  </>
+                )}
               </div>
-              <button
-                onClick={adminDeleteAll}
-                style={{
+
+              {!isAdmin && (
+                <>
+                  <input
+                    placeholder="Новое имя"
+                    value={nameInput}
+                    onChange={e => setNameInput(e.target.value)}
+                    style={{ padding: 10, borderRadius: 8, border: '1px solid #d1d5db', fontSize: 14 }}
+                  />
+                  <div style={{ fontSize: 11, color: '#888', marginTop: -6 }}>
+                    Нельзя: админ, администратор, владелец, создатель, модератор
+                  </div>
+                  <button
+                    onClick={saveName}
+                    style={{
+                      padding: 10,
+                      borderRadius: 8,
+                      border: 'none',
+                      background: '#111827',
+                      color: 'white',
+                      cursor: 'pointer',
+                      fontSize: 14,
+                    }}
+                  >Сохранить имя</button>
+                </>
+              )}
+
+              {isAdmin && (
+                <div style={{
                   padding: 10,
+                  background: '#fef3c7',
                   borderRadius: 8,
-                  border: 'none',
-                  background: '#dc2626',
-                  color: 'white',
-                  cursor: 'pointer',
-                  fontSize: 14,
-                }}
-              >Удалить ВСЕ метки</button>
-              <button
-                onClick={adminLogout}
-                style={{
-                  padding: 10,
-                  borderRadius: 8,
-                  border: '1px solid #d1d5db',
-                  background: 'white',
-                  cursor: 'pointer',
-                  fontSize: 14,
-                }}
-              >Выйти из админа</button>
+                  fontSize: 13,
+                  color: '#92400e',
+                }}>
+                  Вы вошли как <b>Администратор</b>. Имя нельзя изменить.
+                </div>
+              )}
+
+              <hr style={{ margin: '12px 0', border: 'none', borderTop: '1px solid #e5e7eb' }} />
+
+              <b>Админ-панель</b>
+
+              {!isAdmin ? (
+                <>
+                  <input
+                    type="password"
+                    placeholder="Пароль"
+                    value={adminPass}
+                    onChange={e => setAdminPass(e.target.value)}
+                    style={{ padding: 10, borderRadius: 8, border: '1px solid #d1d5db', fontSize: 14 }}
+                  />
+                  <button
+                    onClick={adminLogin}
+                    style={{
+                      padding: 10,
+                      borderRadius: 8,
+                      border: 'none',
+                      background: '#dc2626',
+                      color: 'white',
+                      cursor: 'pointer',
+                      fontSize: 14,
+                    }}
+                  >Войти как админ</button>
+                </>
+              ) : (
+                <>
+                  <div style={{ color: '#16a34a', fontWeight: 600 }}>
+                    ✅ Вы вошли как Администратор
+                  </div>
+                  <button
+                    onClick={adminDeleteAll}
+                    style={{
+                      padding: 10,
+                      borderRadius: 8,
+                      border: 'none',
+                      background: '#dc2626',
+                      color: 'white',
+                      cursor: 'pointer',
+                      fontSize: 14,
+                    }}
+                  >Удалить ВСЕ метки</button>
+                  <button
+                    onClick={() => setShowUsers(true)}
+                    style={{
+                      padding: 10,
+                      borderRadius: 8,
+                      border: 'none',
+                      background: '#1d9bf0',
+                      color: 'white',
+                      cursor: 'pointer',
+                      fontSize: 14,
+                    }}
+                  >👥 Управление пользователями</button>
+                  <button
+                    onClick={adminLogout}
+                    style={{
+                      padding: 10,
+                      borderRadius: 8,
+                      border: '1px solid #d1d5db',
+                      background: 'white',
+                      cursor: 'pointer',
+                      fontSize: 14,
+                    }}
+                  >Выйти из админа</button>
+                </>
+              )}
             </>
           )}
         </div>
@@ -611,24 +816,45 @@ export default function App() {
             >Отмена</button>
           </>
         ) : (
-          TYPES.map(t => (
-            <button
-              key={t.key}
-              onClick={() => setPendingType(t.key)}
-              style={{
-                padding: '8px 12px',
-                borderRadius: 8,
-                border: 'none',
-                background: '#111827',
-                color: 'white',
-                cursor: 'pointer',
-                fontSize: 13,
-                fontWeight: 500,
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
-              }}
-            >{t.label}</button>
-          ))
+          <>
+            {TYPES.map(t => (
+              <button
+                key={t.key}
+                onClick={() => setPendingType(t.key)}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: '#111827',
+                  color: 'white',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 500,
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                }}
+              >{t.label}</button>
+            ))}
+            {/* Кнопки только для админа */}
+            {isAdmin && ADMIN_TYPES.map(t => (
+              <button
+                key={t.key}
+                onClick={() => setPendingType(t.key)}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: '#16a34a',
+                  color: 'white',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 500,
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                }}
+              >{t.label}</button>
+            ))}
+          </>
         )}
       </div>
     </div>
