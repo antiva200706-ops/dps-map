@@ -1,13 +1,20 @@
-// Минимальный Service Worker — нужен, чтобы браузер считал сайт "устанавливаемым"
+const CACHE_NAME = 'dps-map-v1';
+
 self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    caches.keys().then(names => Promise.all(
+      names.filter(n => n !== CACHE_NAME).map(n => caches.delete(n))
+    )).then(() => self.clients.claim())
+  );
 });
 
-// Не кэшируем ничего — пропускаем запросы напрямую
 self.addEventListener('fetch', (event) => {
-  // Пусто — просто чтобы SW существовал
+  // Network-first — сначала пробуем сеть, если нет — кэш
+  event.respondWith(
+    fetch(event.request).catch(() => caches.match(event.request))
+  );
 });
