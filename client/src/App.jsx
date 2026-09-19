@@ -45,7 +45,6 @@ const PINNED_ICONS = {
   trafficlight: makeIcon('🚦', '#16a34a', true),
 };
 
-// Описание кнопок: emoji, цвет, название для отображения
 const TYPES = [
   { key: 'dps',      emoji: '🚓', label: 'ДПС',      bg: 'linear-gradient(135deg, #e11d48, #be123c)' },
   { key: 'camera',   emoji: '📷', label: 'Камера',   bg: 'linear-gradient(135deg, #f59e0b, #d97706)' },
@@ -198,6 +197,10 @@ export default function App() {
   const [targetId, setTargetId] = useState('');
   const [targetUser, setTargetUser] = useState(null);
   const [searchError, setSearchError] = useState('');
+
+  // PWA install
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [isInstalled, setIsInstalled] = useState(false);
 
   const mapRef = useRef(null);
   const lastCenterRef = useRef(center);
@@ -352,6 +355,19 @@ export default function App() {
     }
   }
 
+  async function handleInstallClick() {
+    if (!installPrompt) {
+      alert('Установка недоступна в этом браузере. На iOS: откройте меню «Поделиться» → «На экран Домой».');
+      return;
+    }
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setInstallPrompt(null);
+      setIsInstalled(true);
+    }
+  }
+
   useEffect(() => {
     api.get('/me').then(r => {
       if (r.data.name) setProfileName(r.data.name);
@@ -370,7 +386,27 @@ export default function App() {
     );
 
     const refresh = setInterval(() => loadMarkers(), 20000);
-    return () => clearInterval(refresh);
+
+    // PWA: ловим событие "можно установить"
+    const beforeInstallHandler = (e) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', beforeInstallHandler);
+
+    // Уже установлено?
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      setIsInstalled(true);
+    }
+    window.addEventListener('appinstalled', () => {
+      setIsInstalled(true);
+      setInstallPrompt(null);
+    });
+
+    return () => {
+      clearInterval(refresh);
+      window.removeEventListener('beforeinstallprompt', beforeInstallHandler);
+    };
   }, []);
 
   const canAdminActions = isAdmin || isModerator;
@@ -504,7 +540,6 @@ export default function App() {
         ))}
       </MapContainer>
 
-      {/* Кнопка меню */}
       <div
         onClick={() => setShowProfile(true)}
         style={{
@@ -560,6 +595,44 @@ export default function App() {
 
           {!showAdminPanel && (
             <>
+              {/* === Кнопка "Скачать приложение" === */}
+              {!isInstalled && (
+                <button
+                  onClick={handleInstallClick}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 8,
+                    padding: 12,
+                    borderRadius: 12,
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #16a34a, #15803d)',
+                    color: 'white',
+                    cursor: 'pointer',
+                    fontSize: 15,
+                    fontWeight: 600,
+                    boxShadow: '0 3px 10px rgba(22,163,74,0.3)',
+                  }}
+                >
+                  <span style={{ fontSize: 18 }}>📲</span> Скачать приложение
+                </button>
+              )}
+
+              {isInstalled && (
+                <div style={{
+                  padding: 12,
+                  background: 'linear-gradient(135deg, #dcfce7, #bbf7d0)',
+                  borderRadius: 12,
+                  fontSize: 13,
+                  color: '#15803d',
+                  fontWeight: 500,
+                  textAlign: 'center',
+                }}>
+                  ✅ Приложение установлено
+                </div>
+              )}
+
               <a
                 href="https://t.me/policemap"
                 target="_blank"
@@ -833,7 +906,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Нижняя панель — красивые кнопки */}
       <div style={{
         position: 'fixed',
         bottom: 0, left: 0, right: 0,
@@ -886,37 +958,33 @@ export default function App() {
             >Отмена</button>
           </>
         ) : (
-          allTypes.map(t => {
-            const isActive = pendingType === t.key;
-            return (
-              <button
-                key={t.key}
-                onClick={() => setPendingType(t.key)}
-                style={{
-                  minWidth: 78,
-                  padding: '10px 8px 8px',
-                  borderRadius: 14,
-                  border: 'none',
-                  background: t.bg,
-                  color: 'white',
-                  cursor: 'pointer',
-                  fontSize: 12,
-                  fontWeight: 600,
-                  whiteSpace: 'nowrap',
-                  flexShrink: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  gap: 2,
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.18)',
-                  transition: 'transform 0.15s',
-                }}
-              >
-                <span style={{ fontSize: 22, lineHeight: 1 }}>{t.emoji}</span>
-                <span style={{ fontSize: 11 }}>{t.label}</span>
-              </button>
-            );
-          })
+          allTypes.map(t => (
+            <button
+              key={t.key}
+              onClick={() => setPendingType(t.key)}
+              style={{
+                minWidth: 78,
+                padding: '10px 8px 8px',
+                borderRadius: 14,
+                border: 'none',
+                background: t.bg,
+                color: 'white',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 2,
+                boxShadow: '0 4px 12px rgba(0,0,0,0.18)',
+              }}
+            >
+              <span style={{ fontSize: 22, lineHeight: 1 }}>{t.emoji}</span>
+              <span style={{ fontSize: 11 }}>{t.label}</span>
+            </button>
+          ))
         )}
       </div>
     </div>
