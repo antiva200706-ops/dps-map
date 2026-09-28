@@ -138,6 +138,7 @@ const DEFAULT_SETTINGS = {
   alertRadius: 1,
   alertSound: true,
   alertVibration: true,
+  speedometerEnabled: true,
 };
 
 function loadSettings() {
@@ -189,14 +190,56 @@ function distanceMeters(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// === Звук через Web Audio API (не требует mp3-файла) ===
+// === Максимальная разрешённая скорость по OSM ===
+// Возвращает число (30/40/50/60/70/80/90/110/130) или null
+async function fetchSpeedLimit(lat, lng) {
+  // Ищем дороги в радиусе 30 м
+  const query = `
+    [out:json][timeout:10];
+    way(around:30,${lat},${lng})["highway"];
+    out tags 5;
+  `;
+  try {
+    const res = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      body: query,
+    });
+    const data = await res.json();
+    if (!data.elements || !data.elements.length) return null;
+
+    // Ищем первый с maxspeed
+    for (const el of data.elements) {
+      const ms = el.tags?.maxspeed;
+      if (!ms) continue;
+      // Парсим "60", "60 km/h", "RU:60", "urban", "rural"
+      const s = String(ms).toLowerCase().trim();
+
+      // Числовые
+      const numMatch = s.match(/(\d+)/);
+      if (numMatch) {
+        const n = parseInt(numMatch[1], 10);
+        // Игнорируем заведомо неверные (mph)
+        if (n >= 10 && n <= 150) return n;
+      }
+
+      // Символьные
+      if (s === 'urban' || s === 'city') return 60;
+      if (s === 'rural') return 90;
+      if (s === 'motorway') return 110;
+    }
+    return null;
+  } catch (e) {
+    console.warn('Speed limit error:', e);
+    return null;
+  }
+}
+
 function playAlertSound() {
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return;
     const ctx = new Ctx();
     const now = ctx.currentTime;
-    // Два сигнала "пи-пи"
     [0, 0.22].forEach(offset => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -211,9 +254,7 @@ function playAlertSound() {
       osc.stop(now + offset + 0.2);
     });
     setTimeout(() => ctx.close(), 1000);
-  } catch (e) {
-    console.warn('Sound error:', e);
-  }
+  } catch (e) {}
 }
 
 function vibrate(pattern = [200, 100, 200, 100, 200]) {
@@ -286,7 +327,8 @@ function MapMoveHandler({ onMove }) {
   return null;
 }
 
-function SpeedTracker({ onUpdate }) {
+// === Трекер скорости + запрос лимита ===
+function SpeedTracker({ onUpdate, onPosition }) {
   const bufferRef = useRef([]);
   const stableCountRef = useRef(0);
 
@@ -294,6 +336,10 @@ function SpeedTracker({ onUpdate }) {
     if (!navigator.geolocation) return;
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        if (onPosition) onPosition({ lat, lng });
+
         let speedKmh = pos.coords.speed != null
           ? Math.max(0, pos.coords.speed * 3.6)
           : null;
@@ -318,11 +364,10 @@ function SpeedTracker({ onUpdate }) {
       { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
     );
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [onUpdate]);
+  }, [onUpdate, onPosition]);
   return null;
 }
 
-// === Трекер уведомлений: следит за метками ДПС поблизости ===
 function AlertTracker({ me, markers, settings, onAlert }) {
   const triggeredRef = useRef(new Set());
 
@@ -341,7 +386,6 @@ function AlertTracker({ me, markers, settings, onAlert }) {
         if (settings.alertSound) playAlertSound();
         if (settings.alertVibration) vibrate();
       }
-      // Если ушли далеко — забываем метку (чтобы сработало снова при возврате)
       if (dist > alertRadiusM * 2) {
         triggeredRef.current.delete(m.id);
       }
@@ -377,8 +421,8 @@ export default function App() {
   const [isInstalled, setIsInstalled] = useState(false);
 
   const [mySpeed, setMySpeed] = useState(null);
+  const [speedLimit, setSpeedLimit] = useState(null);
 
-  // Уведомления
   const [alert, setAlert] = useState(null);
   const alertTimerRef = useRef(null);
 
@@ -388,6 +432,7 @@ export default function App() {
 
   const mapRef = useRef(null);
   const lastCenterRef = useRef(center);
+  const lastSpeedCheckRef = useRef(0);
 
   function updateSettings(patch) {
     const next = { ...settings, ...patch };
@@ -402,7 +447,6 @@ export default function App() {
   }
 
   function testAlert() {
-    // Имитируем "рядом ДПС"
     const fakeMarker = {
       id: 'test-' + Date.now(),
       type: 'dps',
@@ -411,6 +455,15 @@ export default function App() {
     showAlert(fakeMarker, 350);
     if (settings.alertSound) playAlertSound();
     if (settings.alertVibration) vibrate();
+  }
+
+  // === Запрос лимита скорости раз в 15 секунд ===
+  async function handlePosition(pos) {
+    const now = Date.now();
+    if (now - lastSpeedCheckRef.current < 15000) return;
+    lastSpeedCheckRef.current = now;
+    const limit = await fetchSpeedLimit(pos.lat, pos.lng);
+    setSpeedLimit(limit);
   }
 
   async function loadMarkers(pos) {
@@ -677,6 +730,9 @@ export default function App() {
     fontFamily: 'system-ui, sans-serif',
   };
 
+  // Превышение?
+  const speeding = speedLimit != null && mySpeed != null && mySpeed > speedLimit + 5;
+
   return (
     <div style={appStyle}>
       <MapContainer
@@ -693,7 +749,7 @@ export default function App() {
         <ClickHandler pendingType={pendingType} onAdd={addMarker} />
         <Recenter pos={me} />
         <MapMoveHandler onMove={handleMapMove} />
-        <SpeedTracker onUpdate={setMySpeed} />
+        <SpeedTracker onUpdate={setMySpeed} onPosition={handlePosition} />
         <AlertTracker me={me} markers={markers} settings={settings} onAlert={showAlert} />
 
         {me && <Marker position={[me.lat, me.lng]} icon={MY_ICON} />}
@@ -788,27 +844,19 @@ export default function App() {
         ))}
       </MapContainer>
 
-      {/* === БАННЕР УВЕДОМЛЕНИЯ === */}
       {alert && (
         <div
           style={{
-            position: 'absolute',
-            top: 70,
-            left: '50%',
+            position: 'absolute', top: 70, left: '50%',
             transform: 'translateX(-50%)',
             background: 'linear-gradient(135deg, #e11d48, #be123c)',
             color: 'white',
             padding: `${14 * textScale}px ${20 * textScale}px`,
             borderRadius: 16,
             boxShadow: '0 8px 30px rgba(225,29,72,0.5)',
-            zIndex: 2000,
-            maxWidth: '92vw',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            fontSize: `${14 * textScale}px`,
-            fontWeight: 600,
-            animation: 'slideDown 0.3s ease-out',
+            zIndex: 2000, maxWidth: '92vw',
+            display: 'flex', alignItems: 'center', gap: 12,
+            fontSize: `${14 * textScale}px`, fontWeight: 600,
           }}
         >
           <span style={{ fontSize: `${28 * textScale}px`, lineHeight: 1 }}>🚓</span>
@@ -822,49 +870,35 @@ export default function App() {
           <button
             onClick={() => setAlert(null)}
             style={{
-              background: 'rgba(255,255,255,0.2)',
-              border: 'none',
-              color: 'white',
-              width: 28, height: 28,
-              borderRadius: 8,
-              fontSize: 16,
-              cursor: 'pointer',
-              marginLeft: 4,
+              background: 'rgba(255,255,255,0.2)', border: 'none',
+              color: 'white', width: 28, height: 28,
+              borderRadius: 8, fontSize: 16, cursor: 'pointer', marginLeft: 4,
             }}
           >×</button>
         </div>
       )}
 
-      {/* Кнопка меню */}
       <div
         onClick={() => setShowProfile(true)}
         style={{
-          position: 'absolute',
-          top: 12, right: 12,
-          background: theme.panel,
-          color: theme.text,
+          position: 'absolute', top: 12, right: 12,
+          background: theme.panel, color: theme.text,
           padding: `${10 * textScale}px ${14 * textScale}px`,
           borderRadius: 12,
           boxShadow: `0 3px 12px ${theme.shadow}`,
-          cursor: 'pointer',
-          fontSize: `${16 * textScale}px`,
-          zIndex: 1000,
-          userSelect: 'none',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
+          cursor: 'pointer', fontSize: `${16 * textScale}px`,
+          zIndex: 1000, userSelect: 'none',
+          display: 'flex', alignItems: 'center', gap: 6,
         }}
       >
         <span style={{ fontWeight: 600 }}>Меню</span>
         <span style={{ fontSize: `${20 * textScale}px`, lineHeight: 1 }}>⋮</span>
       </div>
 
-      {/* Кружок со счётчиком ДПС */}
       {me && (
         <div
           style={{
-            position: 'absolute',
-            top: 12, left: 12,
+            position: 'absolute', top: 12, left: 12,
             background: nearbyDps > 0
               ? 'linear-gradient(135deg, #e11d48, #be123c)'
               : 'linear-gradient(135deg, #16a34a, #15803d)',
@@ -872,13 +906,8 @@ export default function App() {
             padding: `${10 * textScale}px ${14 * textScale}px`,
             borderRadius: 14,
             boxShadow: '0 4px 14px rgba(0,0,0,0.25)',
-            zIndex: 1000,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontSize: `${14 * textScale}px`,
-            fontWeight: 600,
-            userSelect: 'none',
+            zIndex: 1000, display: 'flex', alignItems: 'center', gap: 8,
+            fontSize: `${14 * textScale}px`, fontWeight: 600, userSelect: 'none',
           }}
         >
           <span style={{ fontSize: `${20 * textScale}px` }}>🚓</span>
@@ -889,30 +918,93 @@ export default function App() {
         </div>
       )}
 
-      {/* Спидометр */}
-      {mySpeed != null && mySpeed > 15 && (
+      {/* === СПИДОМЕТР С РАЗРЕШЁННОЙ СКОРОСТЬЮ === */}
+      {settings.speedometerEnabled && mySpeed != null && mySpeed > 15 && (
         <div
           style={{
-            position: 'absolute',
-            bottom: 110, left: 12,
-            background: 'linear-gradient(135deg, #111827, #1f2937)',
-            color: 'white', padding: '10px 14px', borderRadius: 14,
-            boxShadow: '0 4px 14px rgba(0,0,0,0.3)',
+            position: 'absolute', bottom: 110, left: 12,
             zIndex: 1000, display: 'flex', flexDirection: 'column',
-            alignItems: 'center', minWidth: 70, userSelect: 'none',
+            alignItems: 'center', gap: 6,
+            userSelect: 'none',
           }}
         >
-          <span style={{ fontSize: 24, fontWeight: 700, lineHeight: 1 }}>{mySpeed}</span>
-          <span style={{ fontSize: 10, opacity: 0.8, marginTop: 2 }}>км/ч</span>
+          {/* Текущая скорость */}
+          <div
+            style={{
+              background: speeding
+                ? 'linear-gradient(135deg, #dc2626, #991b1b)'
+                : 'linear-gradient(135deg, #111827, #1f2937)',
+              color: 'white',
+              padding: '10px 16px',
+              borderRadius: 14,
+              boxShadow: speeding
+                ? '0 4px 20px rgba(220,38,38,0.6)'
+                : '0 4px 14px rgba(0,0,0,0.3)',
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              minWidth: 76,
+            }}
+          >
+            <span style={{ fontSize: 26, fontWeight: 700, lineHeight: 1 }}>{mySpeed}</span>
+            <span style={{ fontSize: 10, opacity: 0.85, marginTop: 2 }}>км/ч</span>
+          </div>
+
+          {/* Разрешённая скорость */}
+          {speedLimit != null ? (
+            <div
+              style={{
+                background: 'white',
+                border: `4px solid ${speeding ? '#dc2626' : '#e11d48'}`,
+                width: 54, height: 54,
+                borderRadius: '50%',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: speeding
+                  ? '0 4px 20px rgba(220,38,38,0.7)'
+                  : '0 4px 14px rgba(0,0,0,0.25)',
+                animation: speeding ? 'pulseLimit 1s infinite' : 'none',
+              }}
+            >
+              <span style={{
+                fontSize: 22, fontWeight: 800,
+                color: speeding ? '#dc2626' : '#111827',
+                lineHeight: 1,
+              }}>{speedLimit}</span>
+            </div>
+          ) : (
+            <div
+              style={{
+                background: 'rgba(0,0,0,0.7)',
+                color: 'white',
+                width: 54, height: 54,
+                borderRadius: '50%',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 11, textAlign: 'center', padding: 4,
+                boxShadow: '0 4px 14px rgba(0,0,0,0.25)',
+                lineHeight: 1.1,
+              }}
+            >
+              нет<br/>данных
+            </div>
+          )}
+
+          {speeding && (
+            <div style={{
+              background: 'linear-gradient(135deg, #dc2626, #991b1b)',
+              color: 'white',
+              padding: '4px 10px',
+              borderRadius: 8,
+              fontSize: 11, fontWeight: 700,
+              boxShadow: '0 2px 8px rgba(220,38,38,0.5)',
+            }}>
+              ПРЕВЫШЕНИЕ
+            </div>
+          )}
         </div>
       )}
 
-      {/* Кнопка «Я здесь» */}
       <button
         onClick={goToMe}
         style={{
-          position: 'absolute',
-          bottom: 110, right: 12,
+          position: 'absolute', bottom: 110, right: 12,
           width: 52, height: 52, borderRadius: '50%',
           border: 'none',
           background: 'linear-gradient(135deg, #1d9bf0, #0e71b8)',
@@ -935,8 +1027,7 @@ export default function App() {
 
       {showProfile && (
         <div style={{
-          position: 'absolute',
-          top: 0, right: 0, bottom: 0,
+          position: 'absolute', top: 0, right: 0, bottom: 0,
           width: 340, maxWidth: '92vw',
           background: theme.panel, color: theme.text,
           boxShadow: `-2px 0 12px ${theme.shadow}`,
@@ -958,7 +1049,6 @@ export default function App() {
             >×</button>
           </div>
 
-          {/* === НАСТРОЙКИ === */}
           {showSettings && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <button
@@ -970,7 +1060,6 @@ export default function App() {
                 }}
               >← Назад</button>
 
-              {/* Тема */}
               <div>
                 <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
                   Тема
@@ -990,7 +1079,6 @@ export default function App() {
                 </select>
               </div>
 
-              {/* Размер текста */}
               <div>
                 <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
                   Размер текста
@@ -1012,7 +1100,6 @@ export default function App() {
                 </select>
               </div>
 
-              {/* Город */}
               <div>
                 <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
                   Город
@@ -1034,7 +1121,6 @@ export default function App() {
                 </select>
               </div>
 
-              {/* Радиус счётчика ДПС */}
               <div>
                 <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
                   Радиус счётчика ДПС
@@ -1062,10 +1148,45 @@ export default function App() {
 
               <hr style={{ margin: '6px 0', border: 'none', borderTop: `1px solid ${theme.panelBorder}` }} />
 
-              {/* === УВЕДОМЛЕНИЯ === */}
+              {/* Спидометр */}
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: 12, background: theme.card, borderRadius: 12,
+                border: `1px solid ${theme.panelBorder}`,
+              }}>
+                <div>
+                  <div style={{ fontSize: `${14 * textScale}px`, fontWeight: 600 }}>
+                    ⏱ Спидометр
+                  </div>
+                  <div style={{ fontSize: `${11 * textScale}px`, color: theme.textMuted, marginTop: 2 }}>
+                    С разрешённой скоростью
+                  </div>
+                </div>
+                <div
+                  onClick={() => updateSettings({ speedometerEnabled: !settings.speedometerEnabled })}
+                  style={{
+                    width: 50, height: 28, borderRadius: 14,
+                    background: settings.speedometerEnabled
+                      ? 'linear-gradient(135deg, #16a34a, #15803d)'
+                      : '#9ca3af',
+                    cursor: 'pointer', position: 'relative', transition: 'background 0.2s',
+                  }}
+                >
+                  <div style={{
+                    position: 'absolute', top: 3,
+                    left: settings.speedometerEnabled ? 25 : 3,
+                    width: 22, height: 22, borderRadius: '50%',
+                    background: 'white',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                    transition: 'left 0.2s',
+                  }} />
+                </div>
+              </div>
+
+              <hr style={{ margin: '6px 0', border: 'none', borderTop: `1px solid ${theme.panelBorder}` }} />
+
               <b style={{ fontSize: `${15 * textScale}px` }}>🔔 Уведомления</b>
 
-              {/* Вкл/выкл */}
               <div style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                 padding: 12, background: theme.card, borderRadius: 12,
@@ -1086,14 +1207,12 @@ export default function App() {
                     background: settings.alertsEnabled
                       ? 'linear-gradient(135deg, #16a34a, #15803d)'
                       : '#9ca3af',
-                    cursor: 'pointer',
-                    position: 'relative',
-                    transition: 'background 0.2s',
+                    cursor: 'pointer', position: 'relative', transition: 'background 0.2s',
                   }}
                 >
                   <div style={{
-                    position: 'absolute',
-                    top: 3, left: settings.alertsEnabled ? 25 : 3,
+                    position: 'absolute', top: 3,
+                    left: settings.alertsEnabled ? 25 : 3,
                     width: 22, height: 22, borderRadius: '50%',
                     background: 'white',
                     boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
@@ -1104,7 +1223,6 @@ export default function App() {
 
               {settings.alertsEnabled && (
                 <>
-                  {/* Радиус оповещения */}
                   <div>
                     <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
                       Оповещать при расстоянии
@@ -1130,7 +1248,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Звук */}
                   <div style={{
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                     padding: 10, background: theme.card, borderRadius: 10,
@@ -1147,7 +1264,6 @@ export default function App() {
                     />
                   </div>
 
-                  {/* Вибрация */}
                   <div style={{
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                     padding: 10, background: theme.card, borderRadius: 10,
@@ -1168,7 +1284,6 @@ export default function App() {
             </div>
           )}
 
-          {/* === АДМИН === */}
           {showAdminPanel && isAdmin && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <button
@@ -1265,7 +1380,6 @@ export default function App() {
             </div>
           )}
 
-          {/* === ПРОФИЛЬ === */}
           {!showSettings && !showAdminPanel && (
             <>
               {!isInstalled && (
@@ -1367,7 +1481,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Кнопка Настройки */}
               <button
                 onClick={() => setShowSettings(true)}
                 style={{
@@ -1415,7 +1528,6 @@ export default function App() {
                     ✅ Вы вошли как Администратор
                   </div>
 
-                  {/* === КНОПКА ТЕСТА УВЕДОМЛЕНИЙ === */}
                   <button
                     onClick={testAlert}
                     style={{
