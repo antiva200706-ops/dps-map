@@ -10,13 +10,15 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const ADMIN_PASSWORD = 'Anton2104kill';
 const ADMIN_NAME = 'Администратор';
 const MODERATOR_NAME = 'Модератор';
+
+const ORS_API_KEY = process.env.ORS_API_KEY;
 
 const FORBIDDEN_NAMES = [
   'админ', 'администратор', 'создатель', 'владелец',
@@ -181,7 +183,99 @@ app.post('/markers/:id/vote', requireDevice, async (req, res) => {
   res.json({ ...m, status });
 });
 
-// --- Пин и удаление меток: админ ИЛИ модератор ---
+// === ГЕОКОДЕР (Nominatim) ===
+app.get('/geocode', requireDevice, async (req, res) => {
+  const { q } = req.query;
+  if (!q || q.length < 3) return res.status(400).json({ error: 'query too short' });
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(q)}&accept-language=ru`;
+    const r = await fetch(url, {
+      headers: { 'User-Agent': 'GdeDPS/1.0 (dps-map)' }
+    });
+    const data = await r.json();
+    const results = (data || []).map(item => ({
+      name: item.display_name,
+      lat: parseFloat(item.lat),
+      lng: parseFloat(item.lon),
+    }));
+    res.json(results);
+  } catch (e) {
+    console.error('Geocode error:', e);
+    res.status(500).json({ error: 'geocode failed' });
+  }
+});
+
+// === МАРШРУТ (OpenRouteService через новый домен api.heigit.org) ===
+app.post('/route', requireDevice, async (req, res) => {
+  const { from, to, profile = 'driving-car' } = req.body;
+  if (!from || !to) return res.status(400).json({ error: 'from/to required' });
+  if (!ORS_API_KEY) return res.status(500).json({ error: 'no ORS key configured' });
+
+  try {
+    const url = `https://api.heigit.org/openrouteservice/v2/directions/${profile}`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': ORS_API_KEY,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, application/geo+json',
+      },
+      body: JSON.stringify({
+        coordinates: [
+          [from.lng, from.lat],
+          [to.lng, to.lat],
+        ],
+        instructions: false,
+        geometry: true,
+      }),
+    });
+
+    const text = await r.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = text; }
+
+    if (!r.ok) {
+      console.error('ORS error:', r.status, data);
+      return res.status(r.status).json({ error: 'route failed', details: data });
+    }
+
+    // Формат GeoJSON
+    if (data && data.features && data.features[0]) {
+      const feat = data.features[0];
+      const summary = feat.properties?.summary || {};
+      const coords = feat.geometry?.coordinates || [];
+
+      // GeoJSON [lng,lat] -> [lat,lng] для Leaflet
+      const polyline = coords.map(c => [c[1], c[0]]);
+
+      return res.json({
+        distance: summary.distance,   // метры
+        duration: summary.duration,   // секунды
+        polyline,                     // [[lat,lng],...]
+      });
+    }
+
+    // Старый формат (routes)
+    if (data && data.routes && data.routes[0]) {
+      const route = data.routes[0];
+      const summary = route.summary || {};
+      const encoded = route.geometry; // encoded polyline
+      // Декодировать будем на клиенте — но проще вернуть как есть
+      return res.json({
+        distance: summary.distance,
+        duration: summary.duration,
+        encodedPolyline: encoded,
+      });
+    }
+
+    res.status(500).json({ error: 'unknown route format' });
+  } catch (e) {
+    console.error('Route error:', e);
+    res.status(500).json({ error: 'route error' });
+  }
+});
+
+// === Общие админские роуты ===
 
 app.post('/admin/pin/:id', requireDevice, async (req, res) => {
   const role = isAdminOrModerator(req);
@@ -197,8 +291,6 @@ app.post('/admin/delete/:id', requireDevice, async (req, res) => {
   await db.query(`DELETE FROM markers WHERE id = $1`, [req.params.id]);
   res.json({ ok: true });
 });
-
-// --- Только админ (по паролю) ---
 
 app.post('/admin/login', async (req, res) => {
   const { password } = req.body;
@@ -226,7 +318,6 @@ app.post('/admin/delete-all', async (req, res) => {
   res.json({ ok: true });
 });
 
-// Управление пользователем по public_id — одно действие за раз
 app.post('/admin/user/:publicId/action', async (req, res) => {
   const pass = req.header('X-Admin-Password');
   if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'unauthorized' });
@@ -257,7 +348,7 @@ app.post('/admin/user/:publicId/action', async (req, res) => {
       [publicId]
     );
   } else if (action === 'search') {
-    // ничего не делаем — просто возвращаем данные
+    // ничего не делаем — просто вернём данные
   } else {
     return res.status(400).json({ error: 'unknown action' });
   }

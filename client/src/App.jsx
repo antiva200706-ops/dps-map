@@ -3,6 +3,7 @@ import { MapContainer, TileLayer, Marker, Popup, useMapEvents, useMap } from 're
 import L from 'leaflet';
 import axios from 'axios';
 import 'leaflet/dist/leaflet.css';
+import RoutePanel from './RoutePanel';
 
 const API = '';
 const ADMIN_NAME = 'Администратор';
@@ -190,10 +191,7 @@ function distanceMeters(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// === Максимальная разрешённая скорость по OSM ===
-// Возвращает число (30/40/50/60/70/80/90/110/130) или null
 async function fetchSpeedLimit(lat, lng) {
-  // Ищем дороги в радиусе 30 м
   const query = `
     [out:json][timeout:10];
     way(around:30,${lat},${lng})["highway"];
@@ -207,22 +205,15 @@ async function fetchSpeedLimit(lat, lng) {
     const data = await res.json();
     if (!data.elements || !data.elements.length) return null;
 
-    // Ищем первый с maxspeed
     for (const el of data.elements) {
       const ms = el.tags?.maxspeed;
       if (!ms) continue;
-      // Парсим "60", "60 km/h", "RU:60", "urban", "rural"
       const s = String(ms).toLowerCase().trim();
-
-      // Числовые
       const numMatch = s.match(/(\d+)/);
       if (numMatch) {
         const n = parseInt(numMatch[1], 10);
-        // Игнорируем заведомо неверные (mph)
         if (n >= 10 && n <= 150) return n;
       }
-
-      // Символьные
       if (s === 'urban' || s === 'city') return 60;
       if (s === 'rural') return 90;
       if (s === 'motorway') return 110;
@@ -327,7 +318,6 @@ function MapMoveHandler({ onMove }) {
   return null;
 }
 
-// === Трекер скорости + запрос лимита ===
 function SpeedTracker({ onUpdate, onPosition }) {
   const bufferRef = useRef([]);
   const stableCountRef = useRef(0);
@@ -417,6 +407,10 @@ export default function App() {
   const [targetUser, setTargetUser] = useState(null);
   const [searchError, setSearchError] = useState('');
 
+  // Маршрут
+  const [showRoute, setShowRoute] = useState(false);
+  const [routeData, setRouteData] = useState(null);
+
   const [installPrompt, setInstallPrompt] = useState(null);
   const [isInstalled, setIsInstalled] = useState(false);
 
@@ -457,7 +451,6 @@ export default function App() {
     if (settings.alertVibration) vibrate();
   }
 
-  // === Запрос лимита скорости раз в 15 секунд ===
   async function handlePosition(pos) {
     const now = Date.now();
     if (now - lastSpeedCheckRef.current < 15000) return;
@@ -730,7 +723,6 @@ export default function App() {
     fontFamily: 'system-ui, sans-serif',
   };
 
-  // Превышение?
   const speeding = speedLimit != null && mySpeed != null && mySpeed > speedLimit + 5;
 
   return (
@@ -918,7 +910,6 @@ export default function App() {
         </div>
       )}
 
-      {/* === СПИДОМЕТР С РАЗРЕШЁННОЙ СКОРОСТЬЮ === */}
       {settings.speedometerEnabled && mySpeed != null && mySpeed > 15 && (
         <div
           style={{
@@ -928,7 +919,6 @@ export default function App() {
             userSelect: 'none',
           }}
         >
-          {/* Текущая скорость */}
           <div
             style={{
               background: speeding
@@ -948,7 +938,6 @@ export default function App() {
             <span style={{ fontSize: 10, opacity: 0.85, marginTop: 2 }}>км/ч</span>
           </div>
 
-          {/* Разрешённая скорость */}
           {speedLimit != null ? (
             <div
               style={{
@@ -1000,6 +989,33 @@ export default function App() {
           )}
         </div>
       )}
+
+      {/* Кнопка Маршрут — над кнопкой "Я здесь" */}
+      <button
+        onClick={() => setShowRoute(true)}
+        style={{
+          position: 'absolute',
+          bottom: 174,
+          right: 12,
+          width: 52,
+          height: 52,
+          borderRadius: '50%',
+          border: 'none',
+          background: 'linear-gradient(135deg, #16a34a, #15803d)',
+          color: 'white',
+          cursor: 'pointer',
+          boxShadow: '0 4px 14px rgba(22,163,74,0.4)',
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 0,
+          fontSize: 24,
+        }}
+        title="Маршрут"
+      >
+        🗺
+      </button>
 
       <button
         onClick={goToMe}
@@ -1148,7 +1164,6 @@ export default function App() {
 
               <hr style={{ margin: '6px 0', border: 'none', borderTop: `1px solid ${theme.panelBorder}` }} />
 
-              {/* Спидометр */}
               <div style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                 padding: 12, background: theme.card, borderRadius: 12,
@@ -1629,6 +1644,21 @@ export default function App() {
           ))
         )}
       </div>
+
+      {/* Панель маршрута */}
+      {showRoute && (
+        <RoutePanel
+          api={api}
+          theme={theme}
+          textScale={textScale}
+          me={me}
+          onRouteReady={setRouteData}
+          onClose={() => {
+            setShowRoute(false);
+            setRouteData(null);
+          }}
+        />
+      )}
     </div>
   );
 }
