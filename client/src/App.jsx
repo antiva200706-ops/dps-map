@@ -8,7 +8,6 @@ const API = '';
 const ADMIN_NAME = 'Администратор';
 const MODERATOR_NAME = 'Модератор';
 
-// === Список городов ===
 const CITIES = [
   { name: 'Калининград', lat: 54.7104, lng: 20.4522 },
   { name: 'Москва',      lat: 55.7512, lng: 37.6184 },
@@ -19,7 +18,6 @@ const CITIES = [
   { name: 'Рига',        lat: 56.9496, lng: 24.1052 },
 ];
 
-// === Темы ===
 const THEMES = {
   light: {
     bg: '#ffffff',
@@ -45,7 +43,6 @@ const THEMES = {
   },
 };
 
-// Множители размера текста
 const TEXT_SIZES = {
   small: 0.85,
   normal: 1.0,
@@ -109,7 +106,6 @@ const TYPE_LABELS = {
   trafficlight: '🚦 Светофор',
 };
 
-// Радиусы счётчика
 const RADIUS_OPTIONS = [
   { km: 1,  label: '1 км' },
   { km: 3,  label: '3 км' },
@@ -142,12 +138,11 @@ const MY_ICON = L.divIcon({
   iconAnchor: [0, 0],
 });
 
-// === Настройки по умолчанию ===
 const DEFAULT_SETTINGS = {
-  theme: 'light',       // light / dark
-  textSize: 'normal',   // small / normal / large / xlarge
-  city: '',             // '' = автоматически (по геолокации)
-  dpsRadius: 3,         // км
+  theme: 'light',
+  textSize: 'normal',
+  city: '',
+  dpsRadius: 3,
 };
 
 function loadSettings() {
@@ -316,6 +311,7 @@ export default function App() {
   const [adminPassword, setAdminPassword] = useState('');
 
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [targetId, setTargetId] = useState('');
   const [targetUser, setTargetUser] = useState(null);
   const [searchError, setSearchError] = useState('');
@@ -325,7 +321,6 @@ export default function App() {
 
   const [mySpeed, setMySpeed] = useState(null);
 
-  // Настройки
   const [settings, setSettings] = useState(loadSettings());
   const theme = THEMES[settings.theme] || THEMES.light;
   const textScale = TEXT_SIZES[settings.textSize] || 1.0;
@@ -512,6 +507,7 @@ export default function App() {
         const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         setMe(p);
         lastCenterRef.current = p;
+        updateSettings({ city: '' });
         if (mapRef.current) mapRef.current.setView([p.lat, p.lng], 15);
         loadMarkers(p);
       },
@@ -520,7 +516,14 @@ export default function App() {
     );
   }
 
+  // === ИСПРАВЛЕНО: работает и для «Моё местоположение», и для конкретных городов ===
   function goToCity(cityName) {
+    if (!cityName) {
+      // выбрано «Моё местоположение»
+      updateSettings({ city: '' });
+      goToMe();
+      return;
+    }
     const city = CITIES.find(c => c.name === cityName);
     if (!city || !mapRef.current) return;
     mapRef.current.setView([city.lat, city.lng], 13);
@@ -536,7 +539,6 @@ export default function App() {
       setIsModerator(!!r.data.is_moderator);
     }).catch(() => {});
 
-    // Если город выбран в настройках — прыгаем туда, иначе по геолокации
     if (settings.city) {
       const city = CITIES.find(c => c.name === settings.city);
       if (city) {
@@ -588,7 +590,6 @@ export default function App() {
     ? markers.filter(m => m.type === 'dps' && distanceMeters(me.lat, me.lng, m.lat, m.lng) <= radiusM).length
     : 0;
 
-  // Применяем тему и размер текста
   const appStyle = {
     height: '100vh',
     width: '100%',
@@ -856,9 +857,11 @@ export default function App() {
           fontSize: `${14 * textScale}px`,
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <b style={{ fontSize: `${18 * textScale}px` }}>Профиль</b>
+            <b style={{ fontSize: `${18 * textScale}px` }}>
+              {showSettings ? 'Настройки' : (showAdminPanel ? 'Админ' : 'Профиль')}
+            </b>
             <button
-              onClick={() => { setShowProfile(false); setShowAdminPanel(false); }}
+              onClick={() => { setShowProfile(false); setShowAdminPanel(false); setShowSettings(false); }}
               style={{
                 border: 'none',
                 background: theme.card,
@@ -871,7 +874,233 @@ export default function App() {
             >×</button>
           </div>
 
-          {!showAdminPanel && (
+          {/* === ВКЛАДКА НАСТРОЕК === */}
+          {showSettings && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <button
+                onClick={() => setShowSettings(false)}
+                style={{
+                  border: 'none', background: 'transparent', color: '#1d9bf0',
+                  cursor: 'pointer', fontSize: `${13 * textScale}px`, textAlign: 'left', padding: 0,
+                  fontWeight: 500,
+                }}
+              >← Назад</button>
+
+              {/* Тема */}
+              <div>
+                <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
+                  Тема
+                </div>
+                <select
+                  value={settings.theme}
+                  onChange={e => updateSettings({ theme: e.target.value })}
+                  style={{
+                    width: '100%',
+                    padding: 10,
+                    borderRadius: 10,
+                    border: `1px solid ${theme.inputBorder}`,
+                    background: theme.input,
+                    color: theme.text,
+                    fontSize: `${14 * textScale}px`,
+                    outline: 'none',
+                  }}
+                >
+                  <option value="light">Светлая</option>
+                  <option value="dark">Тёмная</option>
+                </select>
+              </div>
+
+              {/* Размер текста */}
+              <div>
+                <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
+                  Размер текста
+                </div>
+                <select
+                  value={settings.textSize}
+                  onChange={e => updateSettings({ textSize: e.target.value })}
+                  style={{
+                    width: '100%',
+                    padding: 10,
+                    borderRadius: 10,
+                    border: `1px solid ${theme.inputBorder}`,
+                    background: theme.input,
+                    color: theme.text,
+                    fontSize: `${14 * textScale}px`,
+                    outline: 'none',
+                  }}
+                >
+                  <option value="small">Мелкий</option>
+                  <option value="normal">Обычный</option>
+                  <option value="large">Крупный</option>
+                  <option value="xlarge">Очень крупный</option>
+                </select>
+              </div>
+
+              {/* Город */}
+              <div>
+                <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
+                  Город
+                </div>
+                <select
+                  value={settings.city}
+                  onChange={e => goToCity(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: 10,
+                    borderRadius: 10,
+                    border: `1px solid ${theme.inputBorder}`,
+                    background: theme.input,
+                    color: theme.text,
+                    fontSize: `${14 * textScale}px`,
+                    outline: 'none',
+                  }}
+                >
+                  <option value="">Моё местоположение</option>
+                  {CITIES.map(c => (
+                    <option key={c.name} value={c.name}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Радиус счётчика ДПС */}
+              <div>
+                <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
+                  Радиус счётчика ДПС
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {RADIUS_OPTIONS.map(r => (
+                    <button
+                      key={r.km}
+                      onClick={() => updateSettings({ dpsRadius: r.km })}
+                      style={{
+                        flex: 1,
+                        minWidth: 60,
+                        padding: '8px 10px',
+                        borderRadius: 10,
+                        border: settings.dpsRadius === r.km
+                          ? '2px solid #1d9bf0'
+                          : `1px solid ${theme.inputBorder}`,
+                        background: settings.dpsRadius === r.km
+                          ? 'linear-gradient(135deg, #1d9bf0, #0e71b8)'
+                          : theme.input,
+                        color: settings.dpsRadius === r.km ? 'white' : theme.text,
+                        cursor: 'pointer',
+                        fontSize: `${13 * textScale}px`,
+                        fontWeight: 600,
+                      }}
+                    >{r.label}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* === ВКЛАДКА АДМИНА === */}
+          {showAdminPanel && isAdmin && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <button
+                onClick={() => { setShowAdminPanel(false); setTargetUser(null); setTargetId(''); setSearchError(''); }}
+                style={{
+                  border: 'none', background: 'transparent', color: '#1d9bf0',
+                  cursor: 'pointer', fontSize: `${13 * textScale}px`, textAlign: 'left', padding: 0,
+                  fontWeight: 500,
+                }}
+              >← Назад к профилю</button>
+
+              <b style={{ fontSize: `${15 * textScale}px` }}>Управление по ID</b>
+
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  placeholder="Например 1005"
+                  value={targetId}
+                  onChange={e => setTargetId(e.target.value.replace(/\D/g, ''))}
+                  onKeyDown={e => { if (e.key === 'Enter') findUser(); }}
+                  style={{
+                    flex: 1,
+                    padding: 12,
+                    borderRadius: 10,
+                    border: `1px solid ${theme.inputBorder}`,
+                    background: theme.input,
+                    color: theme.text,
+                    fontSize: `${14 * textScale}px`,
+                    outline: 'none',
+                  }}
+                />
+                <button
+                  onClick={findUser}
+                  style={{
+                    padding: '12px 16px',
+                    borderRadius: 12,
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #111827, #1f2937)',
+                    color: 'white',
+                    cursor: 'pointer',
+                    fontSize: `${14 * textScale}px`,
+                    fontWeight: 600,
+                  }}
+                >Найти</button>
+              </div>
+
+              {searchError && <div style={{ color: '#dc2626', fontSize: `${13 * textScale}px` }}>{searchError}</div>}
+
+              {targetUser && (
+                <div style={{
+                  padding: 14,
+                  background: theme.card,
+                  borderRadius: 12,
+                  border: `1px solid ${theme.panelBorder}`,
+                }}>
+                  <div style={{ marginBottom: 6, fontSize: `${14 * textScale}px` }}>
+                    <b>ID #{targetUser.public_id}</b>
+                    {targetUser.name && <> — <AuthorName name={targetUser.name} theme={theme} /></>}
+                  </div>
+                  <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 10 }}>
+                    {targetUser.is_banned ? '🚫 забанен' : '✅ активен'}
+                    {targetUser.is_moderator && ' • 🛡 модератор'}
+                    {!targetUser.can_post && ' • ✋ нет права меток'}
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <button
+                      onClick={() => userAction(targetUser.is_banned ? 'unban' : 'ban')}
+                      style={{
+                        padding: 10, borderRadius: 10, border: 'none',
+                        background: targetUser.is_banned
+                          ? 'linear-gradient(135deg, #16a34a, #15803d)'
+                          : 'linear-gradient(135deg, #dc2626, #b91c1c)',
+                        color: 'white', cursor: 'pointer', fontSize: `${13 * textScale}px`, fontWeight: 600,
+                      }}
+                    >{targetUser.is_banned ? '✅ Разблокировать' : '🚫 Заблокировать'}</button>
+
+                    <button
+                      onClick={() => userAction(targetUser.can_post ? 'deny_post' : 'allow_post')}
+                      style={{
+                        padding: 10, borderRadius: 10, border: 'none',
+                        background: targetUser.can_post
+                          ? 'linear-gradient(135deg, #f59e0b, #d97706)'
+                          : 'linear-gradient(135deg, #16a34a, #15803d)',
+                        color: 'white', cursor: 'pointer', fontSize: `${13 * textScale}px`, fontWeight: 600,
+                      }}
+                    >{targetUser.can_post ? '✋ Запретить метки' : '✅ Разрешить метки'}</button>
+
+                    <button
+                      onClick={() => userAction(targetUser.is_moderator ? 'remove_moderator' : 'make_moderator')}
+                      style={{
+                        padding: 10, borderRadius: 10, border: 'none',
+                        background: targetUser.is_moderator
+                          ? 'linear-gradient(135deg, #6b7280, #4b5563)'
+                          : 'linear-gradient(135deg, #1d9bf0, #0e71b8)',
+                        color: 'white', cursor: 'pointer', fontSize: `${13 * textScale}px`, fontWeight: 600,
+                      }}
+                    >{targetUser.is_moderator ? 'Снять модератора' : '🛡 Сделать модератором'}</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* === ВКЛАДКА ПРОФИЛЯ (главная) === */}
+          {!showSettings && !showAdminPanel && (
             <>
               {!isInstalled && (
                 <button
@@ -999,117 +1228,26 @@ export default function App() {
                 </div>
               )}
 
-              {/* === НАСТРОЙКИ === */}
-              <hr style={{ margin: '12px 0', border: 'none', borderTop: `1px solid ${theme.panelBorder}` }} />
-
-              <b style={{ fontSize: `${15 * textScale}px` }}>⚙️ Настройки</b>
-
-              {/* Тема */}
-              <div>
-                <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
-                  Тема
-                </div>
-                <select
-                  value={settings.theme}
-                  onChange={e => updateSettings({ theme: e.target.value })}
-                  style={{
-                    width: '100%',
-                    padding: 10,
-                    borderRadius: 10,
-                    border: `1px solid ${theme.inputBorder}`,
-                    background: theme.input,
-                    color: theme.text,
-                    fontSize: `${14 * textScale}px`,
-                    outline: 'none',
-                  }}
-                >
-                  <option value="light">Светлая</option>
-                  <option value="dark">Тёмная</option>
-                </select>
-              </div>
-
-              {/* Размер текста */}
-              <div>
-                <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
-                  Размер текста
-                </div>
-                <select
-                  value={settings.textSize}
-                  onChange={e => updateSettings({ textSize: e.target.value })}
-                  style={{
-                    width: '100%',
-                    padding: 10,
-                    borderRadius: 10,
-                    border: `1px solid ${theme.inputBorder}`,
-                    background: theme.input,
-                    color: theme.text,
-                    fontSize: `${14 * textScale}px`,
-                    outline: 'none',
-                  }}
-                >
-                  <option value="small">Мелкий</option>
-                  <option value="normal">Обычный</option>
-                  <option value="large">Крупный</option>
-                  <option value="xlarge">Очень крупный</option>
-                </select>
-              </div>
-
-              {/* Город */}
-              <div>
-                <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
-                  Город
-                </div>
-                <select
-                  value={settings.city}
-                  onChange={e => goToCity(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: 10,
-                    borderRadius: 10,
-                    border: `1px solid ${theme.inputBorder}`,
-                    background: theme.input,
-                    color: theme.text,
-                    fontSize: `${14 * textScale}px`,
-                    outline: 'none',
-                  }}
-                >
-                  <option value="">Моё местоположение</option>
-                  {CITIES.map(c => (
-                    <option key={c.name} value={c.name}>{c.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Радиус счётчика ДПС */}
-              <div>
-                <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
-                  Радиус счётчика ДПС
-                </div>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {RADIUS_OPTIONS.map(r => (
-                    <button
-                      key={r.km}
-                      onClick={() => updateSettings({ dpsRadius: r.km })}
-                      style={{
-                        flex: 1,
-                        minWidth: 60,
-                        padding: '8px 10px',
-                        borderRadius: 10,
-                        border: settings.dpsRadius === r.km
-                          ? '2px solid #1d9bf0'
-                          : `1px solid ${theme.inputBorder}`,
-                        background: settings.dpsRadius === r.km
-                          ? 'linear-gradient(135deg, #1d9bf0, #0e71b8)'
-                          : theme.input,
-                        color: settings.dpsRadius === r.km ? 'white' : theme.text,
-                        cursor: 'pointer',
-                        fontSize: `${13 * textScale}px`,
-                        fontWeight: 600,
-                      }}
-                    >{r.label}</button>
-                  ))}
-                </div>
-              </div>
+              {/* Кнопка Настройки */}
+              <button
+                onClick={() => setShowSettings(true)}
+                style={{
+                  padding: 12,
+                  borderRadius: 12,
+                  border: `1px solid ${theme.inputBorder}`,
+                  background: theme.card,
+                  color: theme.text,
+                  cursor: 'pointer',
+                  fontSize: `${14 * textScale}px`,
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                }}
+              >
+                ⚙️ Настройки
+              </button>
 
               <hr style={{ margin: '12px 0', border: 'none', borderTop: `1px solid ${theme.panelBorder}` }} />
 
@@ -1193,109 +1331,6 @@ export default function App() {
                 </>
               )}
             </>
-          )}
-
-          {showAdminPanel && isAdmin && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <button
-                onClick={() => { setShowAdminPanel(false); setTargetUser(null); setTargetId(''); setSearchError(''); }}
-                style={{
-                  border: 'none', background: 'transparent', color: '#1d9bf0',
-                  cursor: 'pointer', fontSize: `${13 * textScale}px`, textAlign: 'left', padding: 0,
-                  fontWeight: 500,
-                }}
-              >← Назад к профилю</button>
-
-              <b style={{ fontSize: `${15 * textScale}px` }}>Управление по ID</b>
-
-              <div style={{ display: 'flex', gap: 6 }}>
-                <input
-                  placeholder="Например 1005"
-                  value={targetId}
-                  onChange={e => setTargetId(e.target.value.replace(/\D/g, ''))}
-                  onKeyDown={e => { if (e.key === 'Enter') findUser(); }}
-                  style={{
-                    flex: 1,
-                    padding: 12,
-                    borderRadius: 10,
-                    border: `1px solid ${theme.inputBorder}`,
-                    background: theme.input,
-                    color: theme.text,
-                    fontSize: `${14 * textScale}px`,
-                    outline: 'none',
-                  }}
-                />
-                <button
-                  onClick={findUser}
-                  style={{
-                    padding: '12px 16px',
-                    borderRadius: 12,
-                    border: 'none',
-                    background: 'linear-gradient(135deg, #111827, #1f2937)',
-                    color: 'white',
-                    cursor: 'pointer',
-                    fontSize: `${14 * textScale}px`,
-                    fontWeight: 600,
-                  }}
-                >Найти</button>
-              </div>
-
-              {searchError && <div style={{ color: '#dc2626', fontSize: `${13 * textScale}px` }}>{searchError}</div>}
-
-              {targetUser && (
-                <div style={{
-                  padding: 14,
-                  background: theme.card,
-                  borderRadius: 12,
-                  border: `1px solid ${theme.panelBorder}`,
-                }}>
-                  <div style={{ marginBottom: 6, fontSize: `${14 * textScale}px` }}>
-                    <b>ID #{targetUser.public_id}</b>
-                    {targetUser.name && <> — <AuthorName name={targetUser.name} theme={theme} /></>}
-                  </div>
-                  <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 10 }}>
-                    {targetUser.is_banned ? '🚫 забанен' : '✅ активен'}
-                    {targetUser.is_moderator && ' • 🛡 модератор'}
-                    {!targetUser.can_post && ' • ✋ нет права меток'}
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    <button
-                      onClick={() => userAction(targetUser.is_banned ? 'unban' : 'ban')}
-                      style={{
-                        padding: 10, borderRadius: 10, border: 'none',
-                        background: targetUser.is_banned
-                          ? 'linear-gradient(135deg, #16a34a, #15803d)'
-                          : 'linear-gradient(135deg, #dc2626, #b91c1c)',
-                        color: 'white', cursor: 'pointer', fontSize: `${13 * textScale}px`, fontWeight: 600,
-                      }}
-                    >{targetUser.is_banned ? '✅ Разблокировать' : '🚫 Заблокировать'}</button>
-
-                    <button
-                      onClick={() => userAction(targetUser.can_post ? 'deny_post' : 'allow_post')}
-                      style={{
-                        padding: 10, borderRadius: 10, border: 'none',
-                        background: targetUser.can_post
-                          ? 'linear-gradient(135deg, #f59e0b, #d97706)'
-                          : 'linear-gradient(135deg, #16a34a, #15803d)',
-                        color: 'white', cursor: 'pointer', fontSize: `${13 * textScale}px`, fontWeight: 600,
-                      }}
-                    >{targetUser.can_post ? '✋ Запретить метки' : '✅ Разрешить метки'}</button>
-
-                    <button
-                      onClick={() => userAction(targetUser.is_moderator ? 'remove_moderator' : 'make_moderator')}
-                      style={{
-                        padding: 10, borderRadius: 10, border: 'none',
-                        background: targetUser.is_moderator
-                          ? 'linear-gradient(135deg, #6b7280, #4b5563)'
-                          : 'linear-gradient(135deg, #1d9bf0, #0e71b8)',
-                        color: 'white', cursor: 'pointer', fontSize: `${13 * textScale}px`, fontWeight: 600,
-                      }}
-                    >{targetUser.is_moderator ? 'Снять модератора' : '🛡 Сделать модератором'}</button>
-                  </div>
-                </div>
-              )}
-            </div>
           )}
         </div>
       )}
