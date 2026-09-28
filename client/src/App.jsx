@@ -8,6 +8,51 @@ const API = '';
 const ADMIN_NAME = 'Администратор';
 const MODERATOR_NAME = 'Модератор';
 
+// === Список городов ===
+const CITIES = [
+  { name: 'Калининград', lat: 54.7104, lng: 20.4522 },
+  { name: 'Москва',      lat: 55.7512, lng: 37.6184 },
+  { name: 'Санкт-Петербург', lat: 59.9343, lng: 30.3351 },
+  { name: 'Гданьск',     lat: 54.3520, lng: 18.6466 },
+  { name: 'Варшава',     lat: 52.2297, lng: 21.0122 },
+  { name: 'Вильнюс',     lat: 54.6872, lng: 25.2797 },
+  { name: 'Рига',        lat: 56.9496, lng: 24.1052 },
+];
+
+// === Темы ===
+const THEMES = {
+  light: {
+    bg: '#ffffff',
+    text: '#111827',
+    textMuted: '#6b7280',
+    panel: '#ffffff',
+    panelBorder: '#e5e7eb',
+    input: '#ffffff',
+    inputBorder: '#d1d5db',
+    card: '#f9fafb',
+    shadow: 'rgba(0,0,0,0.15)',
+  },
+  dark: {
+    bg: '#1a1a1a',
+    text: '#f9fafb',
+    textMuted: '#9ca3af',
+    panel: '#2a2a2a',
+    panelBorder: '#3a3a3a',
+    input: '#2a2a2a',
+    inputBorder: '#3a3a3a',
+    card: '#222222',
+    shadow: 'rgba(0,0,0,0.5)',
+  },
+};
+
+// Множители размера текста
+const TEXT_SIZES = {
+  small: 0.85,
+  normal: 1.0,
+  large: 1.15,
+  xlarge: 1.3,
+};
+
 function makeIcon(emoji, color, pinned) {
   const ring = pinned ? '3px solid #facc15' : '3px solid white';
   return L.divIcon({
@@ -64,6 +109,14 @@ const TYPE_LABELS = {
   trafficlight: '🚦 Светофор',
 };
 
+// Радиусы счётчика
+const RADIUS_OPTIONS = [
+  { km: 1,  label: '1 км' },
+  { km: 3,  label: '3 км' },
+  { km: 5,  label: '5 км' },
+  { km: 10, label: '10 км' },
+];
+
 const MY_ICON = L.divIcon({
   className: '',
   html: `<div style="position:relative;">
@@ -88,6 +141,28 @@ const MY_ICON = L.divIcon({
   iconSize: [36, 36],
   iconAnchor: [0, 0],
 });
+
+// === Настройки по умолчанию ===
+const DEFAULT_SETTINGS = {
+  theme: 'light',       // light / dark
+  textSize: 'normal',   // small / normal / large / xlarge
+  city: '',             // '' = автоматически (по геолокации)
+  dpsRadius: 3,         // км
+};
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem('app_settings');
+    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch (e) {}
+  return DEFAULT_SETTINGS;
+}
+
+function saveSettings(s) {
+  try {
+    localStorage.setItem('app_settings', JSON.stringify(s));
+  } catch (e) {}
+}
 
 function getDeviceId() {
   let id = localStorage.getItem('device_id');
@@ -124,11 +199,11 @@ function distanceMeters(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function AuthorName({ name }) {
+function AuthorName({ name, theme }) {
   const displayName = name || 'Аноним';
   const isAdmin = displayName === ADMIN_NAME;
   const isModerator = displayName === MODERATOR_NAME;
-  let color = '#555';
+  let color = theme.textMuted;
   let weight = 400;
   let badgeColor = null;
   if (isAdmin) { color = '#dc2626'; weight = 600; badgeColor = '#1d9bf0'; }
@@ -225,7 +300,7 @@ function SpeedTracker({ onUpdate }) {
 }
 
 export default function App() {
-  const [center] = useState({ lat: 55.751244, lng: 37.618423 });
+  const [center] = useState({ lat: 54.7104, lng: 20.4522 });
   const [markers, setMarkers] = useState([]);
   const [me, setMe] = useState(null);
   const [pendingType, setPendingType] = useState(null);
@@ -250,8 +325,19 @@ export default function App() {
 
   const [mySpeed, setMySpeed] = useState(null);
 
+  // Настройки
+  const [settings, setSettings] = useState(loadSettings());
+  const theme = THEMES[settings.theme] || THEMES.light;
+  const textScale = TEXT_SIZES[settings.textSize] || 1.0;
+
   const mapRef = useRef(null);
   const lastCenterRef = useRef(center);
+
+  function updateSettings(patch) {
+    const next = { ...settings, ...patch };
+    setSettings(next);
+    saveSettings(next);
+  }
 
   async function loadMarkers(pos) {
     const p = pos || lastCenterRef.current;
@@ -434,6 +520,15 @@ export default function App() {
     );
   }
 
+  function goToCity(cityName) {
+    const city = CITIES.find(c => c.name === cityName);
+    if (!city || !mapRef.current) return;
+    mapRef.current.setView([city.lat, city.lng], 13);
+    lastCenterRef.current = { lat: city.lat, lng: city.lng };
+    loadMarkers({ lat: city.lat, lng: city.lng });
+    updateSettings({ city: cityName });
+  }
+
   useEffect(() => {
     api.get('/me').then(r => {
       if (r.data.name) setProfileName(r.data.name);
@@ -441,15 +536,27 @@ export default function App() {
       setIsModerator(!!r.data.is_moderator);
     }).catch(() => {});
 
-    navigator.geolocation.getCurrentPosition(
-      pos => {
-        const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setMe(p);
-        lastCenterRef.current = p;
-        loadMarkers(p);
-      },
-      () => loadMarkers(center)
-    );
+    // Если город выбран в настройках — прыгаем туда, иначе по геолокации
+    if (settings.city) {
+      const city = CITIES.find(c => c.name === settings.city);
+      if (city) {
+        lastCenterRef.current = { lat: city.lat, lng: city.lng };
+        setTimeout(() => {
+          if (mapRef.current) mapRef.current.setView([city.lat, city.lng], 13);
+        }, 100);
+        loadMarkers({ lat: city.lat, lng: city.lng });
+      }
+    } else {
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          setMe(p);
+          lastCenterRef.current = p;
+          loadMarkers(p);
+        },
+        () => loadMarkers(center)
+      );
+    }
 
     const refresh = setInterval(() => loadMarkers(), 20000);
 
@@ -476,12 +583,24 @@ export default function App() {
   const canAdminActions = isAdmin || isModerator;
   const allTypes = canAdminActions ? [...TYPES, ...ADMIN_TYPES] : TYPES;
 
+  const radiusM = settings.dpsRadius * 1000;
   const nearbyDps = me
-    ? markers.filter(m => m.type === 'dps' && distanceMeters(me.lat, me.lng, m.lat, m.lng) <= 3000).length
+    ? markers.filter(m => m.type === 'dps' && distanceMeters(me.lat, me.lng, m.lat, m.lng) <= radiusM).length
     : 0;
 
+  // Применяем тему и размер текста
+  const appStyle = {
+    height: '100vh',
+    width: '100%',
+    position: 'relative',
+    background: theme.bg,
+    color: theme.text,
+    fontSize: `${14 * textScale}px`,
+    fontFamily: 'system-ui, sans-serif',
+  };
+
   return (
-    <div style={{ height: '100vh', width: '100%', position: 'relative' }}>
+    <div style={appStyle}>
       <MapContainer
         center={[center.lat, center.lng]}
         zoom={13}
@@ -507,11 +626,11 @@ export default function App() {
             icon={m.pinned ? PINNED_ICONS[m.type] : (BASE_ICONS[m.type] || BASE_ICONS.dps)}
           >
             <Popup>
-              <div style={{ minWidth: 220, fontFamily: 'system-ui, sans-serif' }}>
+              <div style={{ minWidth: 220, fontFamily: 'system-ui, sans-serif', color: '#111827' }}>
                 <b style={{ fontSize: 15 }}>{TYPE_LABELS[m.type] || m.type}</b>
                 <br />
                 <small>
-                  от: <AuthorName name={m.author_name} />
+                  от: <AuthorName name={m.author_name} theme={THEMES.light} />
                 </small>
                 {isAdmin && m.author_public_id && (
                   <>
@@ -616,12 +735,13 @@ export default function App() {
         style={{
           position: 'absolute',
           top: 12, right: 12,
-          background: 'white',
-          padding: '10px 14px',
+          background: theme.panel,
+          color: theme.text,
+          padding: `${10 * textScale}px ${14 * textScale}px`,
           borderRadius: 12,
-          boxShadow: '0 3px 12px rgba(0,0,0,0.15)',
+          boxShadow: `0 3px 12px ${theme.shadow}`,
           cursor: 'pointer',
-          fontSize: 16,
+          fontSize: `${16 * textScale}px`,
           zIndex: 1000,
           userSelect: 'none',
           display: 'flex',
@@ -630,10 +750,10 @@ export default function App() {
         }}
       >
         <span style={{ fontWeight: 600 }}>Меню</span>
-        <span style={{ fontSize: 20, lineHeight: 1 }}>⋮</span>
+        <span style={{ fontSize: `${20 * textScale}px`, lineHeight: 1 }}>⋮</span>
       </div>
 
-      {/* Кружок со счётчиком ДПС — слева сверху */}
+      {/* Кружок со счётчиком ДПС */}
       {me && (
         <div
           style={{
@@ -643,24 +763,24 @@ export default function App() {
               ? 'linear-gradient(135deg, #e11d48, #be123c)'
               : 'linear-gradient(135deg, #16a34a, #15803d)',
             color: 'white',
-            padding: '10px 14px',
+            padding: `${10 * textScale}px ${14 * textScale}px`,
             borderRadius: 14,
             boxShadow: '0 4px 14px rgba(0,0,0,0.25)',
             zIndex: 1000,
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            fontSize: 14,
+            fontSize: `${14 * textScale}px`,
             fontWeight: 600,
             userSelect: 'none',
           }}
         >
-          <span style={{ fontSize: 20 }}>🚓</span>
-          <span style={{ fontSize: 15 }}>{nearbyDps}</span>
+          <span style={{ fontSize: `${20 * textScale}px` }}>🚓</span>
+          <span style={{ fontSize: `${15 * textScale}px` }}>{nearbyDps}</span>
         </div>
       )}
 
-      {/* Спидометр — слева снизу */}
+      {/* Спидометр */}
       {mySpeed != null && mySpeed > 15 && (
         <div
           style={{
@@ -685,7 +805,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Кнопка «Я здесь» — справа снизу */}
+      {/* Кнопка «Я здесь» */}
       <button
         onClick={goToMe}
         style={{
@@ -724,23 +844,25 @@ export default function App() {
           top: 0, right: 0, bottom: 0,
           width: 340,
           maxWidth: '92vw',
-          background: 'white',
-          boxShadow: '-2px 0 12px rgba(0,0,0,0.2)',
+          background: theme.panel,
+          color: theme.text,
+          boxShadow: `-2px 0 12px ${theme.shadow}`,
           padding: 20,
           zIndex: 1100,
           display: 'flex',
           flexDirection: 'column',
           gap: 12,
           overflowY: 'auto',
-          fontFamily: 'system-ui, sans-serif',
+          fontSize: `${14 * textScale}px`,
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <b style={{ fontSize: 18 }}>Профиль</b>
+            <b style={{ fontSize: `${18 * textScale}px` }}>Профиль</b>
             <button
               onClick={() => { setShowProfile(false); setShowAdminPanel(false); }}
               style={{
                 border: 'none',
-                background: '#f3f4f6',
+                background: theme.card,
+                color: theme.text,
                 width: 32, height: 32,
                 borderRadius: 8,
                 fontSize: 18,
@@ -765,12 +887,12 @@ export default function App() {
                     background: 'linear-gradient(135deg, #16a34a, #15803d)',
                     color: 'white',
                     cursor: 'pointer',
-                    fontSize: 15,
+                    fontSize: `${15 * textScale}px`,
                     fontWeight: 600,
                     boxShadow: '0 3px 10px rgba(22,163,74,0.3)',
                   }}
                 >
-                  <span style={{ fontSize: 18 }}>📲</span> Скачать приложение
+                  <span style={{ fontSize: `${18 * textScale}px` }}>📲</span> Скачать приложение
                 </button>
               )}
 
@@ -779,7 +901,7 @@ export default function App() {
                   padding: 12,
                   background: 'linear-gradient(135deg, #dcfce7, #bbf7d0)',
                   borderRadius: 12,
-                  fontSize: 13,
+                  fontSize: `${13 * textScale}px`,
                   color: '#15803d',
                   fontWeight: 500,
                   textAlign: 'center',
@@ -802,25 +924,25 @@ export default function App() {
                   background: 'linear-gradient(135deg, #229ED9, #1a7cae)',
                   color: 'white',
                   textDecoration: 'none',
-                  fontSize: 15,
+                  fontSize: `${15 * textScale}px`,
                   fontWeight: 600,
                   boxShadow: '0 3px 10px rgba(34,158,217,0.3)',
                 }}
               >
-                <span style={{ fontSize: 18 }}>✈️</span> Мы в Telegram
+                <span style={{ fontSize: `${18 * textScale}px` }}>✈️</span> Мы в Telegram
               </a>
 
               <div style={{
                 padding: 12,
-                background: 'linear-gradient(135deg, #f9fafb, #f3f4f6)',
+                background: theme.card,
                 borderRadius: 12,
-                border: '1px solid #e5e7eb',
+                border: `1px solid ${theme.panelBorder}`,
               }}>
-                Имя: <AuthorName name={profileName} />
+                Имя: <AuthorName name={profileName} theme={theme} />
                 {profileId && (
                   <>
                     <br />
-                    <span style={{ fontSize: 12, color: '#666' }}>
+                    <span style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted }}>
                       Ваш ID: <b>#{profileId}</b>
                     </span>
                   </>
@@ -836,12 +958,14 @@ export default function App() {
                     style={{
                       padding: 12,
                       borderRadius: 10,
-                      border: '1px solid #d1d5db',
-                      fontSize: 14,
+                      border: `1px solid ${theme.inputBorder}`,
+                      background: theme.input,
+                      color: theme.text,
+                      fontSize: `${14 * textScale}px`,
                       outline: 'none',
                     }}
                   />
-                  <div style={{ fontSize: 11, color: '#888', marginTop: -6 }}>
+                  <div style={{ fontSize: `${11 * textScale}px`, color: theme.textMuted, marginTop: -6 }}>
                     Нельзя: админ, администратор, владелец, создатель, модератор
                   </div>
                   <button
@@ -853,9 +977,8 @@ export default function App() {
                       background: 'linear-gradient(135deg, #111827, #1f2937)',
                       color: 'white',
                       cursor: 'pointer',
-                      fontSize: 14,
+                      fontSize: `${14 * textScale}px`,
                       fontWeight: 600,
-                      boxShadow: '0 3px 10px rgba(0,0,0,0.2)',
                     }}
                   >Сохранить имя</button>
                 </>
@@ -868,7 +991,7 @@ export default function App() {
                     ? 'linear-gradient(135deg, #fef3c7, #fde68a)'
                     : 'linear-gradient(135deg, #dbeafe, #bfdbfe)',
                   borderRadius: 12,
-                  fontSize: 13,
+                  fontSize: `${13 * textScale}px`,
                   color: isAdmin ? '#92400e' : '#1e40af',
                   fontWeight: 500,
                 }}>
@@ -876,9 +999,121 @@ export default function App() {
                 </div>
               )}
 
-              <hr style={{ margin: '12px 0', border: 'none', borderTop: '1px solid #e5e7eb' }} />
+              {/* === НАСТРОЙКИ === */}
+              <hr style={{ margin: '12px 0', border: 'none', borderTop: `1px solid ${theme.panelBorder}` }} />
 
-              <b style={{ fontSize: 15 }}>Админ-панель</b>
+              <b style={{ fontSize: `${15 * textScale}px` }}>⚙️ Настройки</b>
+
+              {/* Тема */}
+              <div>
+                <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
+                  Тема
+                </div>
+                <select
+                  value={settings.theme}
+                  onChange={e => updateSettings({ theme: e.target.value })}
+                  style={{
+                    width: '100%',
+                    padding: 10,
+                    borderRadius: 10,
+                    border: `1px solid ${theme.inputBorder}`,
+                    background: theme.input,
+                    color: theme.text,
+                    fontSize: `${14 * textScale}px`,
+                    outline: 'none',
+                  }}
+                >
+                  <option value="light">Светлая</option>
+                  <option value="dark">Тёмная</option>
+                </select>
+              </div>
+
+              {/* Размер текста */}
+              <div>
+                <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
+                  Размер текста
+                </div>
+                <select
+                  value={settings.textSize}
+                  onChange={e => updateSettings({ textSize: e.target.value })}
+                  style={{
+                    width: '100%',
+                    padding: 10,
+                    borderRadius: 10,
+                    border: `1px solid ${theme.inputBorder}`,
+                    background: theme.input,
+                    color: theme.text,
+                    fontSize: `${14 * textScale}px`,
+                    outline: 'none',
+                  }}
+                >
+                  <option value="small">Мелкий</option>
+                  <option value="normal">Обычный</option>
+                  <option value="large">Крупный</option>
+                  <option value="xlarge">Очень крупный</option>
+                </select>
+              </div>
+
+              {/* Город */}
+              <div>
+                <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
+                  Город
+                </div>
+                <select
+                  value={settings.city}
+                  onChange={e => goToCity(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: 10,
+                    borderRadius: 10,
+                    border: `1px solid ${theme.inputBorder}`,
+                    background: theme.input,
+                    color: theme.text,
+                    fontSize: `${14 * textScale}px`,
+                    outline: 'none',
+                  }}
+                >
+                  <option value="">Моё местоположение</option>
+                  {CITIES.map(c => (
+                    <option key={c.name} value={c.name}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Радиус счётчика ДПС */}
+              <div>
+                <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
+                  Радиус счётчика ДПС
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {RADIUS_OPTIONS.map(r => (
+                    <button
+                      key={r.km}
+                      onClick={() => updateSettings({ dpsRadius: r.km })}
+                      style={{
+                        flex: 1,
+                        minWidth: 60,
+                        padding: '8px 10px',
+                        borderRadius: 10,
+                        border: settings.dpsRadius === r.km
+                          ? '2px solid #1d9bf0'
+                          : `1px solid ${theme.inputBorder}`,
+                        background: settings.dpsRadius === r.km
+                          ? 'linear-gradient(135deg, #1d9bf0, #0e71b8)'
+                          : theme.input,
+                        color: settings.dpsRadius === r.km ? 'white' : theme.text,
+                        cursor: 'pointer',
+                        fontSize: `${13 * textScale}px`,
+                        fontWeight: 600,
+                      }}
+                    >{r.label}</button>
+                  ))}
+                </div>
+              </div>
+
+              <hr style={{ margin: '12px 0', border: 'none', borderTop: `1px solid ${theme.panelBorder}` }} />
+
+              <b style={{ fontSize: `${15 * textScale}px` }}>Админ-панель</b>
 
               {!isAdmin ? (
                 <>
@@ -890,8 +1125,10 @@ export default function App() {
                     style={{
                       padding: 12,
                       borderRadius: 10,
-                      border: '1px solid #d1d5db',
-                      fontSize: 14,
+                      border: `1px solid ${theme.inputBorder}`,
+                      background: theme.input,
+                      color: theme.text,
+                      fontSize: `${14 * textScale}px`,
                       outline: 'none',
                     }}
                   />
@@ -904,15 +1141,14 @@ export default function App() {
                       background: 'linear-gradient(135deg, #dc2626, #b91c1c)',
                       color: 'white',
                       cursor: 'pointer',
-                      fontSize: 14,
+                      fontSize: `${14 * textScale}px`,
                       fontWeight: 600,
-                      boxShadow: '0 3px 10px rgba(220,38,38,0.3)',
                     }}
                   >Войти как админ</button>
                 </>
               ) : (
                 <>
-                  <div style={{ color: '#16a34a', fontWeight: 600, fontSize: 13 }}>
+                  <div style={{ color: '#16a34a', fontWeight: 600, fontSize: `${13 * textScale}px` }}>
                     ✅ Вы вошли как Администратор
                   </div>
                   <button
@@ -924,7 +1160,7 @@ export default function App() {
                       background: 'linear-gradient(135deg, #dc2626, #991b1b)',
                       color: 'white',
                       cursor: 'pointer',
-                      fontSize: 14,
+                      fontSize: `${14 * textScale}px`,
                       fontWeight: 600,
                     }}
                   >🗑 Удалить ВСЕ метки</button>
@@ -937,7 +1173,7 @@ export default function App() {
                       background: 'linear-gradient(135deg, #1d9bf0, #0e71b8)',
                       color: 'white',
                       cursor: 'pointer',
-                      fontSize: 14,
+                      fontSize: `${14 * textScale}px`,
                       fontWeight: 600,
                     }}
                   >🔍 Управление по ID</button>
@@ -946,10 +1182,11 @@ export default function App() {
                     style={{
                       padding: 12,
                       borderRadius: 12,
-                      border: '1px solid #d1d5db',
-                      background: 'white',
+                      border: `1px solid ${theme.inputBorder}`,
+                      background: theme.panel,
+                      color: theme.text,
                       cursor: 'pointer',
-                      fontSize: 14,
+                      fontSize: `${14 * textScale}px`,
                       fontWeight: 500,
                     }}
                   >Выйти из админа</button>
@@ -964,12 +1201,12 @@ export default function App() {
                 onClick={() => { setShowAdminPanel(false); setTargetUser(null); setTargetId(''); setSearchError(''); }}
                 style={{
                   border: 'none', background: 'transparent', color: '#1d9bf0',
-                  cursor: 'pointer', fontSize: 13, textAlign: 'left', padding: 0,
+                  cursor: 'pointer', fontSize: `${13 * textScale}px`, textAlign: 'left', padding: 0,
                   fontWeight: 500,
                 }}
               >← Назад к профилю</button>
 
-              <b style={{ fontSize: 15 }}>Управление по ID</b>
+              <b style={{ fontSize: `${15 * textScale}px` }}>Управление по ID</b>
 
               <div style={{ display: 'flex', gap: 6 }}>
                 <input
@@ -981,8 +1218,10 @@ export default function App() {
                     flex: 1,
                     padding: 12,
                     borderRadius: 10,
-                    border: '1px solid #d1d5db',
-                    fontSize: 14,
+                    border: `1px solid ${theme.inputBorder}`,
+                    background: theme.input,
+                    color: theme.text,
+                    fontSize: `${14 * textScale}px`,
                     outline: 'none',
                   }}
                 />
@@ -995,26 +1234,26 @@ export default function App() {
                     background: 'linear-gradient(135deg, #111827, #1f2937)',
                     color: 'white',
                     cursor: 'pointer',
-                    fontSize: 14,
+                    fontSize: `${14 * textScale}px`,
                     fontWeight: 600,
                   }}
                 >Найти</button>
               </div>
 
-              {searchError && <div style={{ color: '#dc2626', fontSize: 13 }}>{searchError}</div>}
+              {searchError && <div style={{ color: '#dc2626', fontSize: `${13 * textScale}px` }}>{searchError}</div>}
 
               {targetUser && (
                 <div style={{
                   padding: 14,
-                  background: 'linear-gradient(135deg, #f9fafb, #f3f4f6)',
+                  background: theme.card,
                   borderRadius: 12,
-                  border: '1px solid #e5e7eb',
+                  border: `1px solid ${theme.panelBorder}`,
                 }}>
-                  <div style={{ marginBottom: 6, fontSize: 14 }}>
+                  <div style={{ marginBottom: 6, fontSize: `${14 * textScale}px` }}>
                     <b>ID #{targetUser.public_id}</b>
-                    {targetUser.name && <> — <AuthorName name={targetUser.name} /></>}
+                    {targetUser.name && <> — <AuthorName name={targetUser.name} theme={theme} /></>}
                   </div>
-                  <div style={{ fontSize: 12, color: '#666', marginBottom: 10 }}>
+                  <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 10 }}>
                     {targetUser.is_banned ? '🚫 забанен' : '✅ активен'}
                     {targetUser.is_moderator && ' • 🛡 модератор'}
                     {!targetUser.can_post && ' • ✋ нет права меток'}
@@ -1028,7 +1267,7 @@ export default function App() {
                         background: targetUser.is_banned
                           ? 'linear-gradient(135deg, #16a34a, #15803d)'
                           : 'linear-gradient(135deg, #dc2626, #b91c1c)',
-                        color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                        color: 'white', cursor: 'pointer', fontSize: `${13 * textScale}px`, fontWeight: 600,
                       }}
                     >{targetUser.is_banned ? '✅ Разблокировать' : '🚫 Заблокировать'}</button>
 
@@ -1039,7 +1278,7 @@ export default function App() {
                         background: targetUser.can_post
                           ? 'linear-gradient(135deg, #f59e0b, #d97706)'
                           : 'linear-gradient(135deg, #16a34a, #15803d)',
-                        color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                        color: 'white', cursor: 'pointer', fontSize: `${13 * textScale}px`, fontWeight: 600,
                       }}
                     >{targetUser.can_post ? '✋ Запретить метки' : '✅ Разрешить метки'}</button>
 
@@ -1050,7 +1289,7 @@ export default function App() {
                         background: targetUser.is_moderator
                           ? 'linear-gradient(135deg, #6b7280, #4b5563)'
                           : 'linear-gradient(135deg, #1d9bf0, #0e71b8)',
-                        color: 'white', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                        color: 'white', cursor: 'pointer', fontSize: `${13 * textScale}px`, fontWeight: 600,
                       }}
                     >{targetUser.is_moderator ? 'Снять модератора' : '🛡 Сделать модератором'}</button>
                   </div>
@@ -1066,8 +1305,8 @@ export default function App() {
         bottom: 0, left: 0, right: 0,
         padding: '12px 12px',
         paddingBottom: 'max(12px, env(safe-area-inset-bottom))',
-        background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(255,255,255,1) 100%)',
-        boxShadow: '0 -4px 20px rgba(0,0,0,0.12)',
+        background: theme.panel,
+        boxShadow: `0 -4px 20px ${theme.shadow}`,
         display: 'flex',
         gap: 10,
         justifyContent: 'center',
@@ -1086,13 +1325,12 @@ export default function App() {
               padding: '10px 16px',
               background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
               borderRadius: 14,
-              fontSize: 13,
+              fontSize: `${13 * textScale}px`,
               alignSelf: 'center',
               whiteSpace: 'nowrap',
               flexShrink: 0,
               fontWeight: 600,
               color: '#92400e',
-              boxShadow: '0 2px 8px rgba(245,158,11,0.25)',
             }}>
               👆 Тапните по карте
             </div>
@@ -1104,7 +1342,7 @@ export default function App() {
                 border: 'none',
                 background: 'linear-gradient(135deg, #e5e7eb, #d1d5db)',
                 cursor: 'pointer',
-                fontSize: 13,
+                fontSize: `${13 * textScale}px`,
                 fontWeight: 600,
                 color: '#374151',
                 whiteSpace: 'nowrap',
@@ -1125,7 +1363,7 @@ export default function App() {
                 background: t.bg,
                 color: 'white',
                 cursor: 'pointer',
-                fontSize: 12,
+                fontSize: `${12 * textScale}px`,
                 fontWeight: 600,
                 whiteSpace: 'nowrap',
                 flexShrink: 0,
@@ -1136,8 +1374,8 @@ export default function App() {
                 boxShadow: '0 4px 12px rgba(0,0,0,0.18)',
               }}
             >
-              <span style={{ fontSize: 22, lineHeight: 1 }}>{t.emoji}</span>
-              <span style={{ fontSize: 11 }}>{t.label}</span>
+              <span style={{ fontSize: `${22 * textScale}px`, lineHeight: 1 }}>{t.emoji}</span>
+              <span style={{ fontSize: `${11 * textScale}px` }}>{t.label}</span>
             </button>
           ))
         )}
