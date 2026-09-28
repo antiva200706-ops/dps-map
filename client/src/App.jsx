@@ -113,6 +113,18 @@ function timeAgo(iso) {
   return `${h} ч назад`;
 }
 
+// Расстояние между двумя точками (в метрах) — формула Haversine
+function distanceMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 function AuthorName({ name }) {
   const displayName = name || 'Аноним';
   const isAdmin = displayName === ADMIN_NAME;
@@ -159,7 +171,7 @@ function ClickHandler({ pendingType, onAdd }) {
 function Recenter({ pos }) {
   const map = useMap();
   useEffect(() => {
-    if (pos) map.setView([pos.lat, pos.lng], 13);
+    if (pos) map.setView([pos.lat, pos.lng], 15);
   }, [pos, map]);
   return null;
 }
@@ -177,11 +189,31 @@ function MapMoveHandler({ onMove }) {
   return null;
 }
 
+// === Спидометр: отслеживает геолокацию и скорость ===
+function SpeedTracker({ onUpdate }) {
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const speedKmh = pos.coords.speed != null
+          ? Math.max(0, Math.round(pos.coords.speed * 3.6))
+          : null;
+        onUpdate(speedKmh);
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [onUpdate]);
+  return null;
+}
+
 export default function App() {
   const [center] = useState({ lat: 55.751244, lng: 37.618423 });
   const [markers, setMarkers] = useState([]);
   const [me, setMe] = useState(null);
   const [pendingType, setPendingType] = useState(null);
+  const [jumpToMe, setJumpToMe] = useState(0); // триггер для Recenter
 
   const [profileName, setProfileName] = useState('Аноним');
   const [profileId, setProfileId] = useState(null);
@@ -201,6 +233,9 @@ export default function App() {
   // PWA install
   const [installPrompt, setInstallPrompt] = useState(null);
   const [isInstalled, setIsInstalled] = useState(false);
+
+  // Спидометр
+  const [mySpeed, setMySpeed] = useState(null);
 
   const mapRef = useRef(null);
   const lastCenterRef = useRef(center);
@@ -368,6 +403,25 @@ export default function App() {
     }
   }
 
+  // Кнопка «Я здесь» — прыгнуть к текущей позиции
+  function goToMe() {
+    if (!navigator.geolocation) {
+      alert('Геолокация недоступна');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const p = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setMe(p);
+        lastCenterRef.current = p;
+        if (mapRef.current) mapRef.current.setView([p.lat, p.lng], 15);
+        loadMarkers(p);
+      },
+      () => alert('Не удалось определить местоположение'),
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  }
+
   useEffect(() => {
     api.get('/me').then(r => {
       if (r.data.name) setProfileName(r.data.name);
@@ -387,14 +441,12 @@ export default function App() {
 
     const refresh = setInterval(() => loadMarkers(), 20000);
 
-    // PWA: ловим событие "можно установить"
     const beforeInstallHandler = (e) => {
       e.preventDefault();
       setInstallPrompt(e);
     };
     window.addEventListener('beforeinstallprompt', beforeInstallHandler);
 
-    // Уже установлено?
     if (window.matchMedia('(display-mode: standalone)').matches) {
       setIsInstalled(true);
     }
@@ -412,6 +464,11 @@ export default function App() {
   const canAdminActions = isAdmin || isModerator;
   const allTypes = canAdminActions ? [...TYPES, ...ADMIN_TYPES] : TYPES;
 
+  // Считаем метки ДПС рядом (в радиусе 3 км)
+  const nearbyDps = me
+    ? markers.filter(m => m.type === 'dps' && distanceMeters(me.lat, me.lng, m.lat, m.lng) <= 3000).length
+    : 0;
+
   return (
     <div style={{ height: '100vh', width: '100%', position: 'relative' }}>
       <MapContainer
@@ -425,8 +482,9 @@ export default function App() {
         />
         <MapRef onReady={m => (mapRef.current = m)} />
         <ClickHandler pendingType={pendingType} onAdd={addMarker} />
-        <Recenter pos={me} />
+        <Recenter pos={me} key={jumpToMe} />
         <MapMoveHandler onMove={handleMapMove} />
+        <SpeedTracker onUpdate={setMySpeed} />
 
         {me && <Marker position={[me.lat, me.lng]} icon={MY_ICON} />}
 
@@ -540,6 +598,7 @@ export default function App() {
         ))}
       </MapContainer>
 
+      {/* Кнопка меню */}
       <div
         onClick={() => setShowProfile(true)}
         style={{
@@ -561,6 +620,91 @@ export default function App() {
         <span style={{ fontWeight: 600 }}>Меню</span>
         <span style={{ fontSize: 20, lineHeight: 1 }}>⋮</span>
       </div>
+
+      {/* Кружок со счётчиком ДПС рядом — сверху слева */}
+      {me && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 12, left: 12,
+            background: nearbyDps > 0
+              ? 'linear-gradient(135deg, #e11d48, #be123c)'
+              : 'linear-gradient(135deg, #16a34a, #15803d)',
+            color: 'white',
+            padding: '10px 14px',
+            borderRadius: 14,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.25)',
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 14,
+            fontWeight: 600,
+            userSelect: 'none',
+          }}
+        >
+          <span style={{ fontSize: 20 }}>🚓</span>
+          <span style={{ fontSize: 15 }}>{nearbyDps}</span>
+        </div>
+      )}
+
+      {/* Спидометр — снизу слева */}
+      {mySpeed != null && mySpeed > 2 && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 110,
+            left: 12,
+            background: 'linear-gradient(135deg, #111827, #1f2937)',
+            color: 'white',
+            padding: '10px 14px',
+            borderRadius: 14,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.3)',
+            zIndex: 1000,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            minWidth: 70,
+            userSelect: 'none',
+          }}
+        >
+          <span style={{ fontSize: 24, fontWeight: 700, lineHeight: 1 }}>{mySpeed}</span>
+          <span style={{ fontSize: 10, opacity: 0.8, marginTop: 2 }}>км/ч</span>
+        </div>
+      )}
+
+      {/* Кнопка «Я здесь» — снизу справа */}
+      <button
+        onClick={goToMe}
+        style={{
+          position: 'absolute',
+          bottom: 110,
+          right: 12,
+          width: 52,
+          height: 52,
+          borderRadius: '50%',
+          border: 'none',
+          background: 'linear-gradient(135deg, #1d9bf0, #0e71b8)',
+          color: 'white',
+          cursor: 'pointer',
+          boxShadow: '0 4px 14px rgba(29,155,240,0.4)',
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 0,
+        }}
+        title="Я здесь"
+      >
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="3" fill="white" />
+          <circle cx="12" cy="12" r="8" />
+          <line x1="12" y1="1" x2="12" y2="4" />
+          <line x1="12" y1="20" x2="12" y2="23" />
+          <line x1="1" y1="12" x2="4" y2="12" />
+          <line x1="20" y1="12" x2="23" y2="12" />
+        </svg>
+      </button>
 
       {showProfile && (
         <div style={{
@@ -595,7 +739,6 @@ export default function App() {
 
           {!showAdminPanel && (
             <>
-              {/* === Кнопка "Скачать приложение" === */}
               {!isInstalled && (
                 <button
                   onClick={handleInstallClick}
