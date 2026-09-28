@@ -20,34 +20,21 @@ const CITIES = [
 
 const THEMES = {
   light: {
-    bg: '#ffffff',
-    text: '#111827',
-    textMuted: '#6b7280',
-    panel: '#ffffff',
-    panelBorder: '#e5e7eb',
-    input: '#ffffff',
-    inputBorder: '#d1d5db',
-    card: '#f9fafb',
-    shadow: 'rgba(0,0,0,0.15)',
+    bg: '#ffffff', text: '#111827', textMuted: '#6b7280',
+    panel: '#ffffff', panelBorder: '#e5e7eb',
+    input: '#ffffff', inputBorder: '#d1d5db',
+    card: '#f9fafb', shadow: 'rgba(0,0,0,0.15)',
   },
   dark: {
-    bg: '#1a1a1a',
-    text: '#f9fafb',
-    textMuted: '#9ca3af',
-    panel: '#2a2a2a',
-    panelBorder: '#3a3a3a',
-    input: '#2a2a2a',
-    inputBorder: '#3a3a3a',
-    card: '#222222',
-    shadow: 'rgba(0,0,0,0.5)',
+    bg: '#1a1a1a', text: '#f9fafb', textMuted: '#9ca3af',
+    panel: '#2a2a2a', panelBorder: '#3a3a3a',
+    input: '#2a2a2a', inputBorder: '#3a3a3a',
+    card: '#222222', shadow: 'rgba(0,0,0,0.5)',
   },
 };
 
 const TEXT_SIZES = {
-  small: 0.85,
-  normal: 1.0,
-  large: 1.15,
-  xlarge: 1.3,
+  small: 0.85, normal: 1.0, large: 1.15, xlarge: 1.3,
 };
 
 function makeIcon(emoji, color, pinned) {
@@ -99,11 +86,8 @@ const ADMIN_TYPES = [
 ];
 
 const TYPE_LABELS = {
-  dps: '🚓 ДПС',
-  camera: '📷 Камера',
-  accident: '💥 Авария',
-  roadwork: '🚧 Ремонт',
-  trafficlight: '🚦 Светофор',
+  dps: '🚓 ДПС', camera: '📷 Камера', accident: '💥 Авария',
+  roadwork: '🚧 Ремонт', trafficlight: '🚦 Светофор',
 };
 
 const RADIUS_OPTIONS = [
@@ -111,6 +95,13 @@ const RADIUS_OPTIONS = [
   { km: 3,  label: '3 км' },
   { km: 5,  label: '5 км' },
   { km: 10, label: '10 км' },
+];
+
+const ALERT_RADIUS_OPTIONS = [
+  { km: 0.5, label: '500 м' },
+  { km: 1,   label: '1 км' },
+  { km: 2,   label: '2 км' },
+  { km: 3,   label: '3 км' },
 ];
 
 const MY_ICON = L.divIcon({
@@ -143,6 +134,10 @@ const DEFAULT_SETTINGS = {
   textSize: 'normal',
   city: '',
   dpsRadius: 3,
+  alertsEnabled: false,
+  alertRadius: 1,
+  alertSound: true,
+  alertVibration: true,
 };
 
 function loadSettings() {
@@ -192,6 +187,39 @@ function distanceMeters(lat1, lon1, lat2, lon2) {
     Math.sin(dLat / 2) ** 2 +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// === Звук через Web Audio API (не требует mp3-файла) ===
+function playAlertSound() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const now = ctx.currentTime;
+    // Два сигнала "пи-пи"
+    [0, 0.22].forEach(offset => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0, now + offset);
+      gain.gain.linearRampToValueAtTime(0.4, now + offset + 0.02);
+      gain.gain.linearRampToValueAtTime(0, now + offset + 0.18);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + offset);
+      osc.stop(now + offset + 0.2);
+    });
+    setTimeout(() => ctx.close(), 1000);
+  } catch (e) {
+    console.warn('Sound error:', e);
+  }
+}
+
+function vibrate(pattern = [200, 100, 200, 100, 200]) {
+  try {
+    if (navigator.vibrate) navigator.vibrate(pattern);
+  } catch (e) {}
 }
 
 function AuthorName({ name, theme }) {
@@ -294,6 +322,35 @@ function SpeedTracker({ onUpdate }) {
   return null;
 }
 
+// === Трекер уведомлений: следит за метками ДПС поблизости ===
+function AlertTracker({ me, markers, settings, onAlert }) {
+  const triggeredRef = useRef(new Set());
+
+  useEffect(() => {
+    if (!settings.alertsEnabled) return;
+    if (!me) return;
+
+    const alertRadiusM = settings.alertRadius * 1000;
+
+    markers.forEach(m => {
+      if (m.type !== 'dps') return;
+      const dist = distanceMeters(me.lat, me.lng, m.lat, m.lng);
+      if (dist <= alertRadiusM && !triggeredRef.current.has(m.id)) {
+        triggeredRef.current.add(m.id);
+        onAlert(m, Math.round(dist));
+        if (settings.alertSound) playAlertSound();
+        if (settings.alertVibration) vibrate();
+      }
+      // Если ушли далеко — забываем метку (чтобы сработало снова при возврате)
+      if (dist > alertRadiusM * 2) {
+        triggeredRef.current.delete(m.id);
+      }
+    });
+  }, [me, markers, settings, onAlert]);
+
+  return null;
+}
+
 export default function App() {
   const [center] = useState({ lat: 54.7104, lng: 20.4522 });
   const [markers, setMarkers] = useState([]);
@@ -321,6 +378,10 @@ export default function App() {
 
   const [mySpeed, setMySpeed] = useState(null);
 
+  // Уведомления
+  const [alert, setAlert] = useState(null);
+  const alertTimerRef = useRef(null);
+
   const [settings, setSettings] = useState(loadSettings());
   const theme = THEMES[settings.theme] || THEMES.light;
   const textScale = TEXT_SIZES[settings.textSize] || 1.0;
@@ -332,6 +393,24 @@ export default function App() {
     const next = { ...settings, ...patch };
     setSettings(next);
     saveSettings(next);
+  }
+
+  function showAlert(marker, distance) {
+    setAlert({ marker, distance });
+    if (alertTimerRef.current) clearTimeout(alertTimerRef.current);
+    alertTimerRef.current = setTimeout(() => setAlert(null), 6000);
+  }
+
+  function testAlert() {
+    // Имитируем "рядом ДПС"
+    const fakeMarker = {
+      id: 'test-' + Date.now(),
+      type: 'dps',
+      comment: '🔔 Это тестовое уведомление',
+    };
+    showAlert(fakeMarker, 350);
+    if (settings.alertSound) playAlertSound();
+    if (settings.alertVibration) vibrate();
   }
 
   async function loadMarkers(pos) {
@@ -516,10 +595,8 @@ export default function App() {
     );
   }
 
-  // === ИСПРАВЛЕНО: работает и для «Моё местоположение», и для конкретных городов ===
   function goToCity(cityName) {
     if (!cityName) {
-      // выбрано «Моё местоположение»
       updateSettings({ city: '' });
       goToMe();
       return;
@@ -617,6 +694,7 @@ export default function App() {
         <Recenter pos={me} />
         <MapMoveHandler onMove={handleMapMove} />
         <SpeedTracker onUpdate={setMySpeed} />
+        <AlertTracker me={me} markers={markers} settings={settings} onAlert={showAlert} />
 
         {me && <Marker position={[me.lat, me.lng]} icon={MY_ICON} />}
 
@@ -656,29 +734,19 @@ export default function App() {
                     <button
                       onClick={() => vote(m.id, 1)}
                       style={{
-                        flex: 1,
-                        padding: '8px 10px',
-                        cursor: 'pointer',
+                        flex: 1, padding: '8px 10px', cursor: 'pointer',
                         background: 'linear-gradient(135deg, #16a34a, #15803d)',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: 10,
-                        fontSize: 13,
-                        fontWeight: 600,
+                        color: 'white', border: 'none', borderRadius: 10,
+                        fontSize: 13, fontWeight: 600,
                       }}
                     >👍 Да</button>
                     <button
                       onClick={() => vote(m.id, -1)}
                       style={{
-                        flex: 1,
-                        padding: '8px 10px',
-                        cursor: 'pointer',
+                        flex: 1, padding: '8px 10px', cursor: 'pointer',
                         background: 'linear-gradient(135deg, #dc2626, #b91c1c)',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: 10,
-                        fontSize: 13,
-                        fontWeight: 600,
+                        color: 'white', border: 'none', borderRadius: 10,
+                        fontSize: 13, fontWeight: 600,
                       }}
                     >👎 Нет</button>
                   </div>
@@ -695,31 +763,21 @@ export default function App() {
                     <button
                       onClick={() => adminPin(m.id, !m.pinned)}
                       style={{
-                        flex: 1,
-                        padding: '7px 8px',
-                        cursor: 'pointer',
+                        flex: 1, padding: '7px 8px', cursor: 'pointer',
                         background: m.pinned
                           ? 'linear-gradient(135deg, #6b7280, #4b5563)'
                           : 'linear-gradient(135deg, #16a34a, #15803d)',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: 10,
-                        fontSize: 12,
-                        fontWeight: 600,
+                        color: 'white', border: 'none', borderRadius: 10,
+                        fontSize: 12, fontWeight: 600,
                       }}
                     >{m.pinned ? 'Открепить' : '📌 Закрепить'}</button>
                     <button
                       onClick={() => adminDeleteOne(m.id)}
                       style={{
-                        flex: 1,
-                        padding: '7px 8px',
-                        cursor: 'pointer',
+                        flex: 1, padding: '7px 8px', cursor: 'pointer',
                         background: 'linear-gradient(135deg, #dc2626, #991b1b)',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: 10,
-                        fontSize: 12,
-                        fontWeight: 600,
+                        color: 'white', border: 'none', borderRadius: 10,
+                        fontSize: 12, fontWeight: 600,
                       }}
                     >🗑 Удалить</button>
                   </div>
@@ -729,6 +787,53 @@ export default function App() {
           </Marker>
         ))}
       </MapContainer>
+
+      {/* === БАННЕР УВЕДОМЛЕНИЯ === */}
+      {alert && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 70,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: 'linear-gradient(135deg, #e11d48, #be123c)',
+            color: 'white',
+            padding: `${14 * textScale}px ${20 * textScale}px`,
+            borderRadius: 16,
+            boxShadow: '0 8px 30px rgba(225,29,72,0.5)',
+            zIndex: 2000,
+            maxWidth: '92vw',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            fontSize: `${14 * textScale}px`,
+            fontWeight: 600,
+            animation: 'slideDown 0.3s ease-out',
+          }}
+        >
+          <span style={{ fontSize: `${28 * textScale}px`, lineHeight: 1 }}>🚓</span>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontSize: `${15 * textScale}px` }}>Внимание! ДПС рядом</span>
+            <span style={{ fontSize: `${12 * textScale}px`, opacity: 0.9, fontWeight: 400, marginTop: 2 }}>
+              {alert.distance} м от вас
+              {alert.marker?.comment ? ` • ${alert.marker.comment}` : ''}
+            </span>
+          </div>
+          <button
+            onClick={() => setAlert(null)}
+            style={{
+              background: 'rgba(255,255,255,0.2)',
+              border: 'none',
+              color: 'white',
+              width: 28, height: 28,
+              borderRadius: 8,
+              fontSize: 16,
+              cursor: 'pointer',
+              marginLeft: 4,
+            }}
+          >×</button>
+        </div>
+      )}
 
       {/* Кнопка меню */}
       <div
@@ -778,6 +883,9 @@ export default function App() {
         >
           <span style={{ fontSize: `${20 * textScale}px` }}>🚓</span>
           <span style={{ fontSize: `${15 * textScale}px` }}>{nearbyDps}</span>
+          {settings.alertsEnabled && (
+            <span style={{ fontSize: `${14 * textScale}px`, marginLeft: 2 }}>🔔</span>
+          )}
         </div>
       )}
 
@@ -786,19 +894,12 @@ export default function App() {
         <div
           style={{
             position: 'absolute',
-            bottom: 110,
-            left: 12,
+            bottom: 110, left: 12,
             background: 'linear-gradient(135deg, #111827, #1f2937)',
-            color: 'white',
-            padding: '10px 14px',
-            borderRadius: 14,
+            color: 'white', padding: '10px 14px', borderRadius: 14,
             boxShadow: '0 4px 14px rgba(0,0,0,0.3)',
-            zIndex: 1000,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            minWidth: 70,
-            userSelect: 'none',
+            zIndex: 1000, display: 'flex', flexDirection: 'column',
+            alignItems: 'center', minWidth: 70, userSelect: 'none',
           }}
         >
           <span style={{ fontSize: 24, fontWeight: 700, lineHeight: 1 }}>{mySpeed}</span>
@@ -811,21 +912,14 @@ export default function App() {
         onClick={goToMe}
         style={{
           position: 'absolute',
-          bottom: 110,
-          right: 12,
-          width: 52,
-          height: 52,
-          borderRadius: '50%',
+          bottom: 110, right: 12,
+          width: 52, height: 52, borderRadius: '50%',
           border: 'none',
           background: 'linear-gradient(135deg, #1d9bf0, #0e71b8)',
-          color: 'white',
-          cursor: 'pointer',
+          color: 'white', cursor: 'pointer',
           boxShadow: '0 4px 14px rgba(29,155,240,0.4)',
-          zIndex: 1000,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: 0,
+          zIndex: 1000, display: 'flex',
+          alignItems: 'center', justifyContent: 'center', padding: 0,
         }}
         title="Я здесь"
       >
@@ -843,17 +937,12 @@ export default function App() {
         <div style={{
           position: 'absolute',
           top: 0, right: 0, bottom: 0,
-          width: 340,
-          maxWidth: '92vw',
-          background: theme.panel,
-          color: theme.text,
+          width: 340, maxWidth: '92vw',
+          background: theme.panel, color: theme.text,
           boxShadow: `-2px 0 12px ${theme.shadow}`,
-          padding: 20,
-          zIndex: 1100,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-          overflowY: 'auto',
+          padding: 20, zIndex: 1100,
+          display: 'flex', flexDirection: 'column',
+          gap: 12, overflowY: 'auto',
           fontSize: `${14 * textScale}px`,
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -863,26 +952,21 @@ export default function App() {
             <button
               onClick={() => { setShowProfile(false); setShowAdminPanel(false); setShowSettings(false); }}
               style={{
-                border: 'none',
-                background: theme.card,
-                color: theme.text,
-                width: 32, height: 32,
-                borderRadius: 8,
-                fontSize: 18,
-                cursor: 'pointer',
+                border: 'none', background: theme.card, color: theme.text,
+                width: 32, height: 32, borderRadius: 8, fontSize: 18, cursor: 'pointer',
               }}
             >×</button>
           </div>
 
-          {/* === ВКЛАДКА НАСТРОЕК === */}
+          {/* === НАСТРОЙКИ === */}
           {showSettings && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <button
                 onClick={() => setShowSettings(false)}
                 style={{
                   border: 'none', background: 'transparent', color: '#1d9bf0',
-                  cursor: 'pointer', fontSize: `${13 * textScale}px`, textAlign: 'left', padding: 0,
-                  fontWeight: 500,
+                  cursor: 'pointer', fontSize: `${13 * textScale}px`,
+                  textAlign: 'left', padding: 0, fontWeight: 500,
                 }}
               >← Назад</button>
 
@@ -895,14 +979,10 @@ export default function App() {
                   value={settings.theme}
                   onChange={e => updateSettings({ theme: e.target.value })}
                   style={{
-                    width: '100%',
-                    padding: 10,
-                    borderRadius: 10,
+                    width: '100%', padding: 10, borderRadius: 10,
                     border: `1px solid ${theme.inputBorder}`,
-                    background: theme.input,
-                    color: theme.text,
-                    fontSize: `${14 * textScale}px`,
-                    outline: 'none',
+                    background: theme.input, color: theme.text,
+                    fontSize: `${14 * textScale}px`, outline: 'none',
                   }}
                 >
                   <option value="light">Светлая</option>
@@ -919,14 +999,10 @@ export default function App() {
                   value={settings.textSize}
                   onChange={e => updateSettings({ textSize: e.target.value })}
                   style={{
-                    width: '100%',
-                    padding: 10,
-                    borderRadius: 10,
+                    width: '100%', padding: 10, borderRadius: 10,
                     border: `1px solid ${theme.inputBorder}`,
-                    background: theme.input,
-                    color: theme.text,
-                    fontSize: `${14 * textScale}px`,
-                    outline: 'none',
+                    background: theme.input, color: theme.text,
+                    fontSize: `${14 * textScale}px`, outline: 'none',
                   }}
                 >
                   <option value="small">Мелкий</option>
@@ -945,14 +1021,10 @@ export default function App() {
                   value={settings.city}
                   onChange={e => goToCity(e.target.value)}
                   style={{
-                    width: '100%',
-                    padding: 10,
-                    borderRadius: 10,
+                    width: '100%', padding: 10, borderRadius: 10,
                     border: `1px solid ${theme.inputBorder}`,
-                    background: theme.input,
-                    color: theme.text,
-                    fontSize: `${14 * textScale}px`,
-                    outline: 'none',
+                    background: theme.input, color: theme.text,
+                    fontSize: `${14 * textScale}px`, outline: 'none',
                   }}
                 >
                   <option value="">Моё местоположение</option>
@@ -973,10 +1045,7 @@ export default function App() {
                       key={r.km}
                       onClick={() => updateSettings({ dpsRadius: r.km })}
                       style={{
-                        flex: 1,
-                        minWidth: 60,
-                        padding: '8px 10px',
-                        borderRadius: 10,
+                        flex: 1, minWidth: 60, padding: '8px 10px', borderRadius: 10,
                         border: settings.dpsRadius === r.km
                           ? '2px solid #1d9bf0'
                           : `1px solid ${theme.inputBorder}`,
@@ -984,26 +1053,130 @@ export default function App() {
                           ? 'linear-gradient(135deg, #1d9bf0, #0e71b8)'
                           : theme.input,
                         color: settings.dpsRadius === r.km ? 'white' : theme.text,
-                        cursor: 'pointer',
-                        fontSize: `${13 * textScale}px`,
-                        fontWeight: 600,
+                        cursor: 'pointer', fontSize: `${13 * textScale}px`, fontWeight: 600,
                       }}
                     >{r.label}</button>
                   ))}
                 </div>
               </div>
+
+              <hr style={{ margin: '6px 0', border: 'none', borderTop: `1px solid ${theme.panelBorder}` }} />
+
+              {/* === УВЕДОМЛЕНИЯ === */}
+              <b style={{ fontSize: `${15 * textScale}px` }}>🔔 Уведомления</b>
+
+              {/* Вкл/выкл */}
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: 12, background: theme.card, borderRadius: 12,
+                border: `1px solid ${theme.panelBorder}`,
+              }}>
+                <div>
+                  <div style={{ fontSize: `${14 * textScale}px`, fontWeight: 600 }}>
+                    Уведомления о ДПС
+                  </div>
+                  <div style={{ fontSize: `${11 * textScale}px`, color: theme.textMuted, marginTop: 2 }}>
+                    Пока приложение открыто
+                  </div>
+                </div>
+                <div
+                  onClick={() => updateSettings({ alertsEnabled: !settings.alertsEnabled })}
+                  style={{
+                    width: 50, height: 28, borderRadius: 14,
+                    background: settings.alertsEnabled
+                      ? 'linear-gradient(135deg, #16a34a, #15803d)'
+                      : '#9ca3af',
+                    cursor: 'pointer',
+                    position: 'relative',
+                    transition: 'background 0.2s',
+                  }}
+                >
+                  <div style={{
+                    position: 'absolute',
+                    top: 3, left: settings.alertsEnabled ? 25 : 3,
+                    width: 22, height: 22, borderRadius: '50%',
+                    background: 'white',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                    transition: 'left 0.2s',
+                  }} />
+                </div>
+              </div>
+
+              {settings.alertsEnabled && (
+                <>
+                  {/* Радиус оповещения */}
+                  <div>
+                    <div style={{ fontSize: `${12 * textScale}px`, color: theme.textMuted, marginBottom: 4 }}>
+                      Оповещать при расстоянии
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {ALERT_RADIUS_OPTIONS.map(r => (
+                        <button
+                          key={r.km}
+                          onClick={() => updateSettings({ alertRadius: r.km })}
+                          style={{
+                            flex: 1, minWidth: 65, padding: '8px 10px', borderRadius: 10,
+                            border: settings.alertRadius === r.km
+                              ? '2px solid #e11d48'
+                              : `1px solid ${theme.inputBorder}`,
+                            background: settings.alertRadius === r.km
+                              ? 'linear-gradient(135deg, #e11d48, #be123c)'
+                              : theme.input,
+                            color: settings.alertRadius === r.km ? 'white' : theme.text,
+                            cursor: 'pointer', fontSize: `${12 * textScale}px`, fontWeight: 600,
+                          }}
+                        >{r.label}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Звук */}
+                  <div style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: 10, background: theme.card, borderRadius: 10,
+                    border: `1px solid ${theme.panelBorder}`,
+                  }}>
+                    <div style={{ fontSize: `${13 * textScale}px`, fontWeight: 500 }}>
+                      🔊 Звук
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settings.alertSound}
+                      onChange={e => updateSettings({ alertSound: e.target.checked })}
+                      style={{ width: 20, height: 20, cursor: 'pointer' }}
+                    />
+                  </div>
+
+                  {/* Вибрация */}
+                  <div style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: 10, background: theme.card, borderRadius: 10,
+                    border: `1px solid ${theme.panelBorder}`,
+                  }}>
+                    <div style={{ fontSize: `${13 * textScale}px`, fontWeight: 500 }}>
+                      📳 Вибрация
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settings.alertVibration}
+                      onChange={e => updateSettings({ alertVibration: e.target.checked })}
+                      style={{ width: 20, height: 20, cursor: 'pointer' }}
+                    />
+                  </div>
+                </>
+              )}
             </div>
           )}
 
-          {/* === ВКЛАДКА АДМИНА === */}
+          {/* === АДМИН === */}
           {showAdminPanel && isAdmin && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <button
                 onClick={() => { setShowAdminPanel(false); setTargetUser(null); setTargetId(''); setSearchError(''); }}
                 style={{
                   border: 'none', background: 'transparent', color: '#1d9bf0',
-                  cursor: 'pointer', fontSize: `${13 * textScale}px`, textAlign: 'left', padding: 0,
-                  fontWeight: 500,
+                  cursor: 'pointer', fontSize: `${13 * textScale}px`,
+                  textAlign: 'left', padding: 0, fontWeight: 500,
                 }}
               >← Назад к профилю</button>
 
@@ -1016,27 +1189,19 @@ export default function App() {
                   onChange={e => setTargetId(e.target.value.replace(/\D/g, ''))}
                   onKeyDown={e => { if (e.key === 'Enter') findUser(); }}
                   style={{
-                    flex: 1,
-                    padding: 12,
-                    borderRadius: 10,
+                    flex: 1, padding: 12, borderRadius: 10,
                     border: `1px solid ${theme.inputBorder}`,
-                    background: theme.input,
-                    color: theme.text,
-                    fontSize: `${14 * textScale}px`,
-                    outline: 'none',
+                    background: theme.input, color: theme.text,
+                    fontSize: `${14 * textScale}px`, outline: 'none',
                   }}
                 />
                 <button
                   onClick={findUser}
                   style={{
-                    padding: '12px 16px',
-                    borderRadius: 12,
-                    border: 'none',
+                    padding: '12px 16px', borderRadius: 12, border: 'none',
                     background: 'linear-gradient(135deg, #111827, #1f2937)',
-                    color: 'white',
-                    cursor: 'pointer',
-                    fontSize: `${14 * textScale}px`,
-                    fontWeight: 600,
+                    color: 'white', cursor: 'pointer',
+                    fontSize: `${14 * textScale}px`, fontWeight: 600,
                   }}
                 >Найти</button>
               </div>
@@ -1045,9 +1210,7 @@ export default function App() {
 
               {targetUser && (
                 <div style={{
-                  padding: 14,
-                  background: theme.card,
-                  borderRadius: 12,
+                  padding: 14, background: theme.card, borderRadius: 12,
                   border: `1px solid ${theme.panelBorder}`,
                 }}>
                   <div style={{ marginBottom: 6, fontSize: `${14 * textScale}px` }}>
@@ -1068,7 +1231,8 @@ export default function App() {
                         background: targetUser.is_banned
                           ? 'linear-gradient(135deg, #16a34a, #15803d)'
                           : 'linear-gradient(135deg, #dc2626, #b91c1c)',
-                        color: 'white', cursor: 'pointer', fontSize: `${13 * textScale}px`, fontWeight: 600,
+                        color: 'white', cursor: 'pointer',
+                        fontSize: `${13 * textScale}px`, fontWeight: 600,
                       }}
                     >{targetUser.is_banned ? '✅ Разблокировать' : '🚫 Заблокировать'}</button>
 
@@ -1079,7 +1243,8 @@ export default function App() {
                         background: targetUser.can_post
                           ? 'linear-gradient(135deg, #f59e0b, #d97706)'
                           : 'linear-gradient(135deg, #16a34a, #15803d)',
-                        color: 'white', cursor: 'pointer', fontSize: `${13 * textScale}px`, fontWeight: 600,
+                        color: 'white', cursor: 'pointer',
+                        fontSize: `${13 * textScale}px`, fontWeight: 600,
                       }}
                     >{targetUser.can_post ? '✋ Запретить метки' : '✅ Разрешить метки'}</button>
 
@@ -1090,7 +1255,8 @@ export default function App() {
                         background: targetUser.is_moderator
                           ? 'linear-gradient(135deg, #6b7280, #4b5563)'
                           : 'linear-gradient(135deg, #1d9bf0, #0e71b8)',
-                        color: 'white', cursor: 'pointer', fontSize: `${13 * textScale}px`, fontWeight: 600,
+                        color: 'white', cursor: 'pointer',
+                        fontSize: `${13 * textScale}px`, fontWeight: 600,
                       }}
                     >{targetUser.is_moderator ? 'Снять модератора' : '🛡 Сделать модератором'}</button>
                   </div>
@@ -1099,25 +1265,18 @@ export default function App() {
             </div>
           )}
 
-          {/* === ВКЛАДКА ПРОФИЛЯ (главная) === */}
+          {/* === ПРОФИЛЬ === */}
           {!showSettings && !showAdminPanel && (
             <>
               {!isInstalled && (
                 <button
                   onClick={handleInstallClick}
                   style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 8,
-                    padding: 12,
-                    borderRadius: 12,
-                    border: 'none',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    padding: 12, borderRadius: 12, border: 'none',
                     background: 'linear-gradient(135deg, #16a34a, #15803d)',
-                    color: 'white',
-                    cursor: 'pointer',
-                    fontSize: `${15 * textScale}px`,
-                    fontWeight: 600,
+                    color: 'white', cursor: 'pointer',
+                    fontSize: `${15 * textScale}px`, fontWeight: 600,
                     boxShadow: '0 3px 10px rgba(22,163,74,0.3)',
                   }}
                 >
@@ -1129,11 +1288,8 @@ export default function App() {
                 <div style={{
                   padding: 12,
                   background: 'linear-gradient(135deg, #dcfce7, #bbf7d0)',
-                  borderRadius: 12,
-                  fontSize: `${13 * textScale}px`,
-                  color: '#15803d',
-                  fontWeight: 500,
-                  textAlign: 'center',
+                  borderRadius: 12, fontSize: `${13 * textScale}px`,
+                  color: '#15803d', fontWeight: 500, textAlign: 'center',
                 }}>
                   ✅ Приложение установлено
                 </div>
@@ -1144,17 +1300,11 @@ export default function App() {
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
-                  padding: 12,
-                  borderRadius: 12,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  padding: 12, borderRadius: 12,
                   background: 'linear-gradient(135deg, #229ED9, #1a7cae)',
-                  color: 'white',
-                  textDecoration: 'none',
-                  fontSize: `${15 * textScale}px`,
-                  fontWeight: 600,
+                  color: 'white', textDecoration: 'none',
+                  fontSize: `${15 * textScale}px`, fontWeight: 600,
                   boxShadow: '0 3px 10px rgba(34,158,217,0.3)',
                 }}
               >
@@ -1162,9 +1312,7 @@ export default function App() {
               </a>
 
               <div style={{
-                padding: 12,
-                background: theme.card,
-                borderRadius: 12,
+                padding: 12, background: theme.card, borderRadius: 12,
                 border: `1px solid ${theme.panelBorder}`,
               }}>
                 Имя: <AuthorName name={profileName} theme={theme} />
@@ -1185,13 +1333,10 @@ export default function App() {
                     value={nameInput}
                     onChange={e => setNameInput(e.target.value)}
                     style={{
-                      padding: 12,
-                      borderRadius: 10,
+                      padding: 12, borderRadius: 10,
                       border: `1px solid ${theme.inputBorder}`,
-                      background: theme.input,
-                      color: theme.text,
-                      fontSize: `${14 * textScale}px`,
-                      outline: 'none',
+                      background: theme.input, color: theme.text,
+                      fontSize: `${14 * textScale}px`, outline: 'none',
                     }}
                   />
                   <div style={{ fontSize: `${11 * textScale}px`, color: theme.textMuted, marginTop: -6 }}>
@@ -1200,14 +1345,10 @@ export default function App() {
                   <button
                     onClick={saveName}
                     style={{
-                      padding: 12,
-                      borderRadius: 12,
-                      border: 'none',
+                      padding: 12, borderRadius: 12, border: 'none',
                       background: 'linear-gradient(135deg, #111827, #1f2937)',
-                      color: 'white',
-                      cursor: 'pointer',
-                      fontSize: `${14 * textScale}px`,
-                      fontWeight: 600,
+                      color: 'white', cursor: 'pointer',
+                      fontSize: `${14 * textScale}px`, fontWeight: 600,
                     }}
                   >Сохранить имя</button>
                 </>
@@ -1219,10 +1360,8 @@ export default function App() {
                   background: isAdmin
                     ? 'linear-gradient(135deg, #fef3c7, #fde68a)'
                     : 'linear-gradient(135deg, #dbeafe, #bfdbfe)',
-                  borderRadius: 12,
-                  fontSize: `${13 * textScale}px`,
-                  color: isAdmin ? '#92400e' : '#1e40af',
-                  fontWeight: 500,
+                  borderRadius: 12, fontSize: `${13 * textScale}px`,
+                  color: isAdmin ? '#92400e' : '#1e40af', fontWeight: 500,
                 }}>
                   Вы вошли как <b>{isAdmin ? 'Администратор' : 'Модератор'}</b>. Имя нельзя изменить.
                 </div>
@@ -1232,18 +1371,11 @@ export default function App() {
               <button
                 onClick={() => setShowSettings(true)}
                 style={{
-                  padding: 12,
-                  borderRadius: 12,
+                  padding: 12, borderRadius: 12,
                   border: `1px solid ${theme.inputBorder}`,
-                  background: theme.card,
-                  color: theme.text,
-                  cursor: 'pointer',
-                  fontSize: `${14 * textScale}px`,
-                  fontWeight: 600,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
+                  background: theme.card, color: theme.text,
+                  cursor: 'pointer', fontSize: `${14 * textScale}px`, fontWeight: 600,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                 }}
               >
                 ⚙️ Настройки
@@ -1261,26 +1393,19 @@ export default function App() {
                     value={adminPass}
                     onChange={e => setAdminPass(e.target.value)}
                     style={{
-                      padding: 12,
-                      borderRadius: 10,
+                      padding: 12, borderRadius: 10,
                       border: `1px solid ${theme.inputBorder}`,
-                      background: theme.input,
-                      color: theme.text,
-                      fontSize: `${14 * textScale}px`,
-                      outline: 'none',
+                      background: theme.input, color: theme.text,
+                      fontSize: `${14 * textScale}px`, outline: 'none',
                     }}
                   />
                   <button
                     onClick={adminLogin}
                     style={{
-                      padding: 12,
-                      borderRadius: 12,
-                      border: 'none',
+                      padding: 12, borderRadius: 12, border: 'none',
                       background: 'linear-gradient(135deg, #dc2626, #b91c1c)',
-                      color: 'white',
-                      cursor: 'pointer',
-                      fontSize: `${14 * textScale}px`,
-                      fontWeight: 600,
+                      color: 'white', cursor: 'pointer',
+                      fontSize: `${14 * textScale}px`, fontWeight: 600,
                     }}
                   >Войти как админ</button>
                 </>
@@ -1289,43 +1414,44 @@ export default function App() {
                   <div style={{ color: '#16a34a', fontWeight: 600, fontSize: `${13 * textScale}px` }}>
                     ✅ Вы вошли как Администратор
                   </div>
+
+                  {/* === КНОПКА ТЕСТА УВЕДОМЛЕНИЙ === */}
+                  <button
+                    onClick={testAlert}
+                    style={{
+                      padding: 12, borderRadius: 12, border: 'none',
+                      background: 'linear-gradient(135deg, #e11d48, #be123c)',
+                      color: 'white', cursor: 'pointer',
+                      fontSize: `${14 * textScale}px`, fontWeight: 600,
+                      boxShadow: '0 3px 10px rgba(225,29,72,0.3)',
+                    }}
+                  >🧪 Тест уведомления (рядом ДПС)</button>
+
                   <button
                     onClick={adminDeleteAll}
                     style={{
-                      padding: 12,
-                      borderRadius: 12,
-                      border: 'none',
+                      padding: 12, borderRadius: 12, border: 'none',
                       background: 'linear-gradient(135deg, #dc2626, #991b1b)',
-                      color: 'white',
-                      cursor: 'pointer',
-                      fontSize: `${14 * textScale}px`,
-                      fontWeight: 600,
+                      color: 'white', cursor: 'pointer',
+                      fontSize: `${14 * textScale}px`, fontWeight: 600,
                     }}
                   >🗑 Удалить ВСЕ метки</button>
                   <button
                     onClick={() => setShowAdminPanel(true)}
                     style={{
-                      padding: 12,
-                      borderRadius: 12,
-                      border: 'none',
+                      padding: 12, borderRadius: 12, border: 'none',
                       background: 'linear-gradient(135deg, #1d9bf0, #0e71b8)',
-                      color: 'white',
-                      cursor: 'pointer',
-                      fontSize: `${14 * textScale}px`,
-                      fontWeight: 600,
+                      color: 'white', cursor: 'pointer',
+                      fontSize: `${14 * textScale}px`, fontWeight: 600,
                     }}
                   >🔍 Управление по ID</button>
                   <button
                     onClick={adminLogout}
                     style={{
-                      padding: 12,
-                      borderRadius: 12,
+                      padding: 12, borderRadius: 12,
                       border: `1px solid ${theme.inputBorder}`,
-                      background: theme.panel,
-                      color: theme.text,
-                      cursor: 'pointer',
-                      fontSize: `${14 * textScale}px`,
-                      fontWeight: 500,
+                      background: theme.panel, color: theme.text,
+                      cursor: 'pointer', fontSize: `${14 * textScale}px`, fontWeight: 500,
                     }}
                   >Выйти из админа</button>
                 </>
@@ -1342,46 +1468,30 @@ export default function App() {
         paddingBottom: 'max(12px, env(safe-area-inset-bottom))',
         background: theme.panel,
         boxShadow: `0 -4px 20px ${theme.shadow}`,
-        display: 'flex',
-        gap: 10,
-        justifyContent: 'center',
-        zIndex: 1000,
-        flexWrap: 'nowrap',
-        overflowX: 'auto',
-        overflowY: 'hidden',
-        WebkitOverflowScrolling: 'touch',
-        scrollbarWidth: 'none',
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
+        display: 'flex', gap: 10, justifyContent: 'center',
+        zIndex: 1000, flexWrap: 'nowrap',
+        overflowX: 'auto', overflowY: 'hidden',
+        WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none',
+        borderTopLeftRadius: 20, borderTopRightRadius: 20,
       }}>
         {pendingType ? (
           <>
             <div style={{
               padding: '10px 16px',
               background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
-              borderRadius: 14,
-              fontSize: `${13 * textScale}px`,
-              alignSelf: 'center',
-              whiteSpace: 'nowrap',
-              flexShrink: 0,
-              fontWeight: 600,
-              color: '#92400e',
+              borderRadius: 14, fontSize: `${13 * textScale}px`,
+              alignSelf: 'center', whiteSpace: 'nowrap', flexShrink: 0,
+              fontWeight: 600, color: '#92400e',
             }}>
               👆 Тапните по карте
             </div>
             <button
               onClick={() => setPendingType(null)}
               style={{
-                padding: '10px 20px',
-                borderRadius: 14,
-                border: 'none',
+                padding: '10px 20px', borderRadius: 14, border: 'none',
                 background: 'linear-gradient(135deg, #e5e7eb, #d1d5db)',
-                cursor: 'pointer',
-                fontSize: `${13 * textScale}px`,
-                fontWeight: 600,
-                color: '#374151',
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
+                cursor: 'pointer', fontSize: `${13 * textScale}px`, fontWeight: 600,
+                color: '#374151', whiteSpace: 'nowrap', flexShrink: 0,
               }}
             >Отмена</button>
           </>
@@ -1391,21 +1501,13 @@ export default function App() {
               key={t.key}
               onClick={() => setPendingType(t.key)}
               style={{
-                minWidth: 78,
-                padding: '10px 8px 8px',
-                borderRadius: 14,
-                border: 'none',
-                background: t.bg,
-                color: 'white',
-                cursor: 'pointer',
-                fontSize: `${12 * textScale}px`,
-                fontWeight: 600,
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: 2,
+                minWidth: 78, padding: '10px 8px 8px',
+                borderRadius: 14, border: 'none',
+                background: t.bg, color: 'white', cursor: 'pointer',
+                fontSize: `${12 * textScale}px`, fontWeight: 600,
+                whiteSpace: 'nowrap', flexShrink: 0,
+                display: 'flex', flexDirection: 'column',
+                alignItems: 'center', gap: 2,
                 boxShadow: '0 4px 12px rgba(0,0,0,0.18)',
               }}
             >
