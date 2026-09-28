@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMapEvents, useMap, ZoomControl } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import axios from 'axios';
 import 'leaflet/dist/leaflet.css';
@@ -188,7 +188,6 @@ function MapMoveHandler({ onMove }) {
   return null;
 }
 
-// === Спидометр: сглаживание + порог 15 км/ч ===
 function SpeedTracker({ onUpdate }) {
   const bufferRef = useRef([]);
   const stableCountRef = useRef(0);
@@ -489,7 +488,6 @@ export default function App() {
         zoomControl={false}
         style={{ height: '100%', width: '100%' }}
       >
-        <ZoomControl position="topright" />
         <TileLayer
           attribution='&copy; OpenStreetMap'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -635,7 +633,7 @@ export default function App() {
         <span style={{ fontSize: 20, lineHeight: 1 }}>⋮</span>
       </div>
 
-      {/* Кружок со счётчиком ДПС — слева сверху (зум-кнопки теперь справа) */}
+      {/* Кружок со счётчиком ДПС — слева сверху */}
       {me && (
         <div
           style={{
