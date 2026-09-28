@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMapEvents, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMapEvents, useMap, ZoomControl } from 'react-leaflet';
 import L from 'leaflet';
 import axios from 'axios';
 import 'leaflet/dist/leaflet.css';
@@ -113,7 +113,6 @@ function timeAgo(iso) {
   return `${h} ч назад`;
 }
 
-// Расстояние между двумя точками (в метрах) — формула Haversine
 function distanceMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const toRad = (d) => (d * Math.PI) / 180;
@@ -189,16 +188,34 @@ function MapMoveHandler({ onMove }) {
   return null;
 }
 
-// === Спидометр: отслеживает геолокацию и скорость ===
+// === Спидометр: сглаживание + порог 15 км/ч ===
 function SpeedTracker({ onUpdate }) {
+  const bufferRef = useRef([]);
+  const stableCountRef = useRef(0);
+
   useEffect(() => {
     if (!navigator.geolocation) return;
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
-        const speedKmh = pos.coords.speed != null
-          ? Math.max(0, Math.round(pos.coords.speed * 3.6))
+        let speedKmh = pos.coords.speed != null
+          ? Math.max(0, pos.coords.speed * 3.6)
           : null;
-        onUpdate(speedKmh);
+        if (speedKmh == null) return;
+
+        const buf = bufferRef.current;
+        buf.push(speedKmh);
+        if (buf.length > 5) buf.shift();
+        const avg = buf.reduce((a, b) => a + b, 0) / buf.length;
+
+        if (avg < 15) {
+          stableCountRef.current = 0;
+          onUpdate(0);
+        } else {
+          stableCountRef.current += 1;
+          if (stableCountRef.current >= 2) {
+            onUpdate(Math.round(avg));
+          }
+        }
       },
       () => {},
       { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
@@ -213,7 +230,6 @@ export default function App() {
   const [markers, setMarkers] = useState([]);
   const [me, setMe] = useState(null);
   const [pendingType, setPendingType] = useState(null);
-  const [jumpToMe, setJumpToMe] = useState(0); // триггер для Recenter
 
   const [profileName, setProfileName] = useState('Аноним');
   const [profileId, setProfileId] = useState(null);
@@ -230,11 +246,9 @@ export default function App() {
   const [targetUser, setTargetUser] = useState(null);
   const [searchError, setSearchError] = useState('');
 
-  // PWA install
   const [installPrompt, setInstallPrompt] = useState(null);
   const [isInstalled, setIsInstalled] = useState(false);
 
-  // Спидометр
   const [mySpeed, setMySpeed] = useState(null);
 
   const mapRef = useRef(null);
@@ -403,7 +417,6 @@ export default function App() {
     }
   }
 
-  // Кнопка «Я здесь» — прыгнуть к текущей позиции
   function goToMe() {
     if (!navigator.geolocation) {
       alert('Геолокация недоступна');
@@ -464,7 +477,6 @@ export default function App() {
   const canAdminActions = isAdmin || isModerator;
   const allTypes = canAdminActions ? [...TYPES, ...ADMIN_TYPES] : TYPES;
 
-  // Считаем метки ДПС рядом (в радиусе 3 км)
   const nearbyDps = me
     ? markers.filter(m => m.type === 'dps' && distanceMeters(me.lat, me.lng, m.lat, m.lng) <= 3000).length
     : 0;
@@ -474,15 +486,17 @@ export default function App() {
       <MapContainer
         center={[center.lat, center.lng]}
         zoom={13}
+        zoomControl={false}
         style={{ height: '100%', width: '100%' }}
       >
+        <ZoomControl position="topright" />
         <TileLayer
           attribution='&copy; OpenStreetMap'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         <MapRef onReady={m => (mapRef.current = m)} />
         <ClickHandler pendingType={pendingType} onAdd={addMarker} />
-        <Recenter pos={me} key={jumpToMe} />
+        <Recenter pos={me} />
         <MapMoveHandler onMove={handleMapMove} />
         <SpeedTracker onUpdate={setMySpeed} />
 
@@ -621,7 +635,7 @@ export default function App() {
         <span style={{ fontSize: 20, lineHeight: 1 }}>⋮</span>
       </div>
 
-      {/* Кружок со счётчиком ДПС рядом — сверху слева */}
+      {/* Кружок со счётчиком ДПС — слева сверху (зум-кнопки теперь справа) */}
       {me && (
         <div
           style={{
@@ -648,8 +662,8 @@ export default function App() {
         </div>
       )}
 
-      {/* Спидометр — снизу слева */}
-      {mySpeed != null && mySpeed > 2 && (
+      {/* Спидометр — слева снизу */}
+      {mySpeed != null && mySpeed > 15 && (
         <div
           style={{
             position: 'absolute',
@@ -673,7 +687,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Кнопка «Я здесь» — снизу справа */}
+      {/* Кнопка «Я здесь» — справа снизу */}
       <button
         onClick={goToMe}
         style={{
