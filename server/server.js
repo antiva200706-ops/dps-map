@@ -20,6 +20,39 @@ const MODERATOR_NAME = 'Модератор';
 
 const ORS_API_KEY = process.env.ORS_API_KEY;
 
+// === Декодер Google Polyline (используется OpenRouteService) ===
+function decodePolyline(encoded) {
+  if (!encoded) return [];
+  let index = 0, len = encoded.length;
+  let lat = 0, lng = 0;
+  const coordinates = [];
+
+  while (index < len) {
+    let b, shift = 0, result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlat = ((result & 1) !== 0 ? ~(result >> 1) : (result >> 1));
+    lat += dlat;
+
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlng = ((result & 1) !== 0 ? ~(result >> 1) : (result >> 1));
+    lng += dlng;
+
+    coordinates.push([lat * 1e-5, lng * 1e-5]);
+  }
+
+  return coordinates;
+}
+
 const FORBIDDEN_NAMES = [
   'админ', 'администратор', 'создатель', 'владелец',
   'admin', 'administrator', 'owner', 'creator',
@@ -205,7 +238,7 @@ app.get('/geocode', requireDevice, async (req, res) => {
   }
 });
 
-// === МАРШРУТ (OpenRouteService через новый домен api.heigit.org) ===
+// === МАРШРУТ (OpenRouteService через api.heigit.org) ===
 app.post('/route', requireDevice, async (req, res) => {
   const { from, to, profile = 'driving-car' } = req.body;
   if (!from || !to) return res.status(400).json({ error: 'from/to required' });
@@ -244,27 +277,25 @@ app.post('/route', requireDevice, async (req, res) => {
       const feat = data.features[0];
       const summary = feat.properties?.summary || {};
       const coords = feat.geometry?.coordinates || [];
-
-      // GeoJSON [lng,lat] -> [lat,lng] для Leaflet
       const polyline = coords.map(c => [c[1], c[0]]);
 
       return res.json({
-        distance: summary.distance,   // метры
-        duration: summary.duration,   // секунды
-        polyline,                     // [[lat,lng],...]
+        distance: summary.distance,
+        duration: summary.duration,
+        polyline,
       });
     }
 
-    // Старый формат (routes)
+    // Старый формат (routes) — декодируем encodedPolyline
     if (data && data.routes && data.routes[0]) {
       const route = data.routes[0];
       const summary = route.summary || {};
-      const encoded = route.geometry; // encoded polyline
-      // Декодировать будем на клиенте — но проще вернуть как есть
+      const encoded = route.geometry;
+      const polyline = decodePolyline(encoded);
       return res.json({
         distance: summary.distance,
         duration: summary.duration,
-        encodedPolyline: encoded,
+        polyline,
       });
     }
 
@@ -348,7 +379,7 @@ app.post('/admin/user/:publicId/action', async (req, res) => {
       [publicId]
     );
   } else if (action === 'search') {
-    // ничего не делаем — просто вернём данные
+    // ничего
   } else {
     return res.status(400).json({ error: 'unknown action' });
   }
