@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMapEvents, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMapEvents, useMap, Polyline } from 'react-leaflet';
 import L from 'leaflet';
 import axios from 'axios';
 import 'leaflet/dist/leaflet.css';
@@ -74,6 +74,33 @@ const PINNED_ICONS = {
   roadwork:     makeIcon('🚧', '#2563eb', true),
   trafficlight: makeIcon('🚦', '#16a34a', true),
 };
+
+// Иконки для точек A и B маршрута
+const START_ICON = L.divIcon({
+  className: '',
+  html: `<div style="
+    width:24px;height:24px;border-radius:50%;
+    background:#16a34a;border:3px solid white;
+    box-shadow:0 2px 8px rgba(0,0,0,0.4);
+    display:flex;align-items:center;justify-content:center;
+    color:white;font-weight:bold;font-size:12px;
+  ">A</div>`,
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+});
+
+const END_ICON = L.divIcon({
+  className: '',
+  html: `<div style="
+    width:24px;height:24px;border-radius:50%;
+    background:#dc2626;border:3px solid white;
+    box-shadow:0 2px 8px rgba(0,0,0,0.4);
+    display:flex;align-items:center;justify-content:center;
+    color:white;font-weight:bold;font-size:12px;
+  ">B</div>`,
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+});
 
 const TYPES = [
   { key: 'dps',      emoji: '🚓', label: 'ДПС',      bg: 'linear-gradient(135deg, #e11d48, #be123c)' },
@@ -220,7 +247,6 @@ async function fetchSpeedLimit(lat, lng) {
     }
     return null;
   } catch (e) {
-    console.warn('Speed limit error:', e);
     return null;
   }
 }
@@ -746,6 +772,27 @@ export default function App() {
 
         {me && <Marker position={[me.lat, me.lng]} icon={MY_ICON} />}
 
+        {/* ЛИНИЯ МАРШРУТА (внутри MapContainer) */}
+        {routeData && routeData.polyline && (
+          <>
+            <Polyline
+              positions={routeData.polyline}
+              pathOptions={{
+                color: '#1d9bf0',
+                weight: 6,
+                opacity: 0.85,
+                lineCap: 'round',
+              }}
+            />
+            {routeData.from && (
+              <Marker position={[routeData.from.lat, routeData.from.lng]} icon={START_ICON} />
+            )}
+            {routeData.to && (
+              <Marker position={[routeData.to.lat, routeData.to.lng]} icon={END_ICON} />
+            )}
+          </>
+        )}
+
         {markers.map(m => (
           <Marker
             key={m.id}
@@ -990,7 +1037,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Кнопка Маршрут — над кнопкой "Я здесь" */}
       <button
         onClick={() => setShowRoute(true)}
         style={{
@@ -1645,7 +1691,6 @@ export default function App() {
         )}
       </div>
 
-      {/* Панель маршрута */}
       {showRoute && (
         <RoutePanel
           api={api}
