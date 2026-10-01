@@ -772,7 +772,7 @@ export default function App() {
 
         {me && <Marker position={[me.lat, me.lng]} icon={MY_ICON} />}
 
-        {/* ЛИНИЯ МАРШРУТА (внутри MapContainer) */}
+        {/* ЛИНИЯ МАРШРУТА */}
         {routeData && routeData.polyline && (
           <>
             <Polyline
@@ -1634,6 +1634,7 @@ export default function App() {
         </div>
       )}
 
+      {!showRoute && (
       <div style={{
         position: 'fixed',
         bottom: 0, left: 0, right: 0,
@@ -1690,6 +1691,7 @@ export default function App() {
           ))
         )}
       </div>
+      )}
 
       {showRoute && (
         <RoutePanel
@@ -1701,6 +1703,9 @@ export default function App() {
           onClose={() => {
             setShowRoute(false);
             setRouteData(null);
+          }}
+          onStart={() => {
+            setShowRoute(false);
           }}
         />
       )}

@@ -21,6 +21,7 @@ export default function RoutePanel({
   me,
   onRouteReady,
   onClose,
+  onStart,
 }) {
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState([]);
@@ -270,21 +271,40 @@ export default function RoutePanel({
       )}
 
       {route && (
-        <button
-          onClick={reset}
-          style={{
-            padding: 12,
-            borderRadius: 12,
-            border: `1px solid ${theme.inputBorder}`,
-            background: theme.card,
-            color: theme.text,
-            cursor: 'pointer',
-            fontSize: `${14 * textScale}px`,
-            fontWeight: 600,
-          }}
-        >
-          🔄 Сбросить маршрут
-        </button>
+        <>
+          <button
+            onClick={onStart}
+            style={{
+              padding: 14,
+              borderRadius: 12,
+              border: 'none',
+              background: 'linear-gradient(135deg, #16a34a, #15803d)',
+              color: 'white',
+              cursor: 'pointer',
+              fontSize: `${15 * textScale}px`,
+              fontWeight: 700,
+              boxShadow: '0 4px 14px rgba(22,163,74,0.4)',
+            }}
+          >
+            🚗 Начать
+          </button>
+
+          <button
+            onClick={reset}
+            style={{
+              padding: 12,
+              borderRadius: 12,
+              border: `1px solid ${theme.inputBorder}`,
+              background: theme.card,
+              color: theme.text,
+              cursor: 'pointer',
+              fontSize: `${14 * textScale}px`,
+              fontWeight: 600,
+            }}
+          >
+            🔄 Сбросить маршрут
+          </button>
+        </>
       )}
     </div>
   );
