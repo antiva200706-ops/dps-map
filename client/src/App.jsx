@@ -75,7 +75,6 @@ const PINNED_ICONS = {
   trafficlight: makeIcon('🚦', '#16a34a', true),
 };
 
-// Иконки для точек A и B маршрута
 const START_ICON = L.divIcon({
   className: '',
   html: `<div style="
@@ -433,7 +432,6 @@ export default function App() {
   const [targetUser, setTargetUser] = useState(null);
   const [searchError, setSearchError] = useState('');
 
-  // Маршрут
   const [showRoute, setShowRoute] = useState(false);
   const [routeData, setRouteData] = useState(null);
 
@@ -442,6 +440,7 @@ export default function App() {
 
   const [mySpeed, setMySpeed] = useState(null);
   const [speedLimit, setSpeedLimit] = useState(null);
+  const [stats, setStats] = useState({ users_total: 0, users_online: 0 });
 
   const [alert, setAlert] = useState(null);
   const alertTimerRef = useRef(null);
@@ -711,6 +710,12 @@ export default function App() {
 
     const refresh = setInterval(() => loadMarkers(), 20000);
 
+    // === Статистика юзеров ===
+    api.get('/stats').then(r => setStats(r.data)).catch(() => {});
+    const statsInterval = setInterval(() => {
+      api.get('/stats').then(r => setStats(r.data)).catch(() => {});
+    }, 60000);
+
     const beforeInstallHandler = (e) => {
       e.preventDefault();
       setInstallPrompt(e);
@@ -727,6 +732,7 @@ export default function App() {
 
     return () => {
       clearInterval(refresh);
+      clearInterval(statsInterval);
       window.removeEventListener('beforeinstallprompt', beforeInstallHandler);
     };
   }, []);
@@ -772,7 +778,6 @@ export default function App() {
 
         {me && <Marker position={[me.lat, me.lng]} icon={MY_ICON} />}
 
-        {/* ЛИНИЯ МАРШРУТА */}
         {routeData && routeData.polyline && (
           <>
             <Polyline
@@ -819,6 +824,18 @@ export default function App() {
                 <small style={{ color: '#888' }}>
                   {m.pinned ? '📌 закреплено' : timeAgo(m.created_at)}
                 </small>
+                {m.type === 'camera' && (
+                  <>
+                    <br />
+                    <small style={{
+                      color: m.pinned ? '#16a34a' : '#f59e0b',
+                      fontWeight: 600,
+                      fontSize: 12,
+                    }}>
+                      {m.pinned ? '✅ Камера подтверждена администратором' : '⚠️ Не подтверждено администратором'}
+                    </small>
+                  </>
+                )}
                 <br />
                 <div style={{ margin: '8px 0', fontSize: 14 }}>
                   👍 {m.confirm_votes} &nbsp; 👎 {m.reject_votes}
@@ -956,6 +973,29 @@ export default function App() {
           )}
         </div>
       )}
+
+      {/* === СТАТИСТИКА ЮЗЕРОВ === */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 12, left: 110,
+          background: theme.panel,
+          color: theme.text,
+          padding: `${8 * textScale}px ${12 * textScale}px`,
+          borderRadius: 14,
+          boxShadow: `0 3px 12px ${theme.shadow}`,
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          fontSize: `${13 * textScale}px`,
+          fontWeight: 600,
+          userSelect: 'none',
+        }}
+      >
+        <span>👥 {stats.users_total}</span>
+        <span style={{ color: '#16a34a' }}>🟢 {stats.users_online}</span>
+      </div>
 
       {settings.speedometerEnabled && mySpeed != null && mySpeed > 15 && (
         <div

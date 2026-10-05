@@ -20,7 +20,6 @@ const MODERATOR_NAME = 'Модератор';
 
 const ORS_API_KEY = process.env.ORS_API_KEY;
 
-// === Декодер Google Polyline (используется OpenRouteService) ===
 function decodePolyline(encoded) {
   if (!encoded) return [];
   let index = 0, len = encoded.length;
@@ -71,8 +70,8 @@ app.use(express.static(clientDist));
 
 async function getOrCreateUser(deviceId) {
   const { rows } = await db.query(
-    `INSERT INTO users (device_id) VALUES ($1)
-     ON CONFLICT (device_id) DO UPDATE SET device_id = EXCLUDED.device_id
+    `INSERT INTO users (device_id, last_seen) VALUES ($1, now())
+     ON CONFLICT (device_id) DO UPDATE SET device_id = EXCLUDED.device_id, last_seen = now()
      RETURNING *`,
     [deviceId]
   );
@@ -104,6 +103,23 @@ app.get('/me', requireDevice, (req, res) => {
   });
 });
 
+// === СТАТИСТИКА: всего юзеров + онлайн (за 5 минут) ===
+app.get('/stats', requireDevice, async (req, res) => {
+  try {
+    const total = await db.query(`SELECT COUNT(*)::int AS c FROM users`);
+    const online = await db.query(
+      `SELECT COUNT(*)::int AS c FROM users WHERE last_seen > now() - interval '5 minutes'`
+    );
+    res.json({
+      users_total: total.rows[0].c,
+      users_online: online.rows[0].c,
+    });
+  } catch (e) {
+    console.error('Stats error:', e);
+    res.status(500).json({ error: 'stats failed' });
+  }
+});
+
 app.post('/me', requireDevice, async (req, res) => {
   const { name } = req.body;
   if (!name || name.length > 40) return res.status(400).json({ error: 'bad name' });
@@ -130,7 +146,11 @@ app.get('/markers', requireDevice, async (req, res) => {
             m.pinned, m.expires_at, m.author_name, m.author_public_id,
             m.author_is_moderator
      FROM markers m
-     WHERE (m.status IN ('pending','active') AND m.expires_at > now() OR m.pinned = true)
+     WHERE (
+             m.type = 'camera'
+             OR (m.status IN ('pending','active') AND m.expires_at > now())
+             OR m.pinned = true
+           )
        AND ST_DWithin(m.location, ST_MakePoint($1,$2)::geography, $3)`,
     [lng, lat, radius]
   );
@@ -159,9 +179,13 @@ app.post('/markers', requireDevice, async (req, res) => {
   const authorPublicId = req.user.public_id;
   const authorIsModerator = !!req.user.is_moderator;
 
+  const expiresAtSql = type === 'camera'
+    ? "now() + interval '100 years'"
+    : "now() + interval '2 hours'";
+
   const { rows } = await db.query(
-    `INSERT INTO markers (user_id, type, location, comment, author_name, author_public_id, author_is_moderator)
-     VALUES ($1, $2, ST_MakePoint($3,$4)::geography, $5, $6, $7, $8)
+    `INSERT INTO markers (user_id, type, location, comment, author_name, author_public_id, author_is_moderator, expires_at)
+     VALUES ($1, $2, ST_MakePoint($3,$4)::geography, $5, $6, $7, $8, ${expiresAtSql})
      RETURNING id, type, comment, confirm_votes, reject_votes, status, created_at`,
     [req.user.id, type, lng, lat, comment || null, authorName, authorPublicId, authorIsModerator]
   );
@@ -178,7 +202,7 @@ app.post('/markers/:id/vote', requireDevice, async (req, res) => {
   const role = isAdminOrModerator(req);
   const isAdmin = !!role;
 
-  const check = await db.query(`SELECT pinned FROM markers WHERE id = $1`, [req.params.id]);
+  const check = await db.query(`SELECT pinned, type FROM markers WHERE id = $1`, [req.params.id]);
   if (!check.rows.length) return res.status(404).json({ error: 'not found' });
   if (check.rows[0].pinned && !isAdmin) {
     return res.status(403).json({ error: 'pinned marker, voting disabled' });
@@ -200,13 +224,14 @@ app.post('/markers/:id/vote', requireDevice, async (req, res) => {
        confirm_votes = confirm_votes + CASE WHEN $1 = 1 THEN 1 ELSE 0 END,
        reject_votes  = reject_votes  + CASE WHEN $1 = -1 THEN 1 ELSE 0 END
      WHERE id = $2
-     RETURNING confirm_votes, reject_votes, pinned`,
+     RETURNING confirm_votes, reject_votes, pinned, type`,
     [value, req.params.id]
   );
 
   const m = rows[0];
   let status = null;
-  if (!m.pinned) {
+  const isCamera = m.type === 'camera';
+  if (!m.pinned && !isCamera) {
     if (m.confirm_votes >= 3 && m.confirm_votes > m.reject_votes) status = 'active';
     if (m.reject_votes >= 3) status = 'rejected';
   }
@@ -216,7 +241,6 @@ app.post('/markers/:id/vote', requireDevice, async (req, res) => {
   res.json({ ...m, status });
 });
 
-// === ГЕОКОДЕР (Nominatim) ===
 app.get('/geocode', requireDevice, async (req, res) => {
   const { q } = req.query;
   if (!q || q.length < 3) return res.status(400).json({ error: 'query too short' });
@@ -238,7 +262,6 @@ app.get('/geocode', requireDevice, async (req, res) => {
   }
 });
 
-// === МАРШРУТ (OpenRouteService через api.heigit.org) ===
 app.post('/route', requireDevice, async (req, res) => {
   const { from, to, profile = 'driving-car' } = req.body;
   if (!from || !to) return res.status(400).json({ error: 'from/to required' });
@@ -272,13 +295,11 @@ app.post('/route', requireDevice, async (req, res) => {
       return res.status(r.status).json({ error: 'route failed', details: data });
     }
 
-    // Формат GeoJSON
     if (data && data.features && data.features[0]) {
       const feat = data.features[0];
       const summary = feat.properties?.summary || {};
       const coords = feat.geometry?.coordinates || [];
       const polyline = coords.map(c => [c[1], c[0]]);
-
       return res.json({
         distance: summary.distance,
         duration: summary.duration,
@@ -286,7 +307,6 @@ app.post('/route', requireDevice, async (req, res) => {
       });
     }
 
-    // Старый формат (routes) — декодируем encodedPolyline
     if (data && data.routes && data.routes[0]) {
       const route = data.routes[0];
       const summary = route.summary || {};
@@ -305,8 +325,6 @@ app.post('/route', requireDevice, async (req, res) => {
     res.status(500).json({ error: 'route error' });
   }
 });
-
-// === Общие админские роуты ===
 
 app.post('/admin/pin/:id', requireDevice, async (req, res) => {
   const role = isAdminOrModerator(req);
