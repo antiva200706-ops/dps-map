@@ -413,7 +413,6 @@ app.post('/tickets/open', requireDevice, async (req, res) => {
 
 // === АДМИНСКИЕ РОУТЫ ===
 
-// Список всех тикетов (только НЕ удалённые админом)
 app.get('/admin/tickets', requireDevice, async (req, res) => {
   const role = isAdminOrModerator(req);
   if (!role) return res.status(401).json({ error: 'unauthorized' });
@@ -481,7 +480,6 @@ app.post('/admin/tickets/:id/close', requireDevice, async (req, res) => {
   }
 });
 
-// Удалить тикет у админа (у юзера остаётся)
 app.post('/admin/tickets/:id/delete', requireDevice, async (req, res) => {
   const role = isAdminOrModerator(req);
   if (!role) return res.status(401).json({ error: 'unauthorized' });
@@ -724,6 +722,14 @@ io.on('connection', (socket) => {
       );
 
       const msg = rows[0];
+
+      // Если пишет пользователь (не админ) — вернуть тикет в список админа
+      if (!authorIsAdmin) {
+        await db.query(
+          `UPDATE tickets SET deleted_by_admin = false WHERE id = $1`,
+          [ticketId]
+        );
+      }
 
       io.to(`ticket-${ticketId}`).emit('ticket:message', {
         ticket_id: ticketId,
