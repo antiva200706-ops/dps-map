@@ -1190,7 +1190,7 @@ export default function App() {
           display: 'flex', flexDirection: 'column',
           gap: 12,
           overflowY: 'auto',
-          overscrollBehavior: 'contain',
+          WebkitOverflowScrolling: 'touch',
           fontSize: `${14 * textScale}px`,
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1765,7 +1765,6 @@ export default function App() {
         zIndex: 1000, flexWrap: 'nowrap',
         overflowX: 'auto', overflowY: 'hidden',
         WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none',
-        overscrollBehavior: 'contain',
         borderTopLeftRadius: 20, borderTopRightRadius: 20,
       }}>
         {pendingType ? (

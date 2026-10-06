@@ -207,7 +207,6 @@ export default function AdminTickets({
         overflow: 'hidden',
         fontSize: `${14 * textScale}px`,
       }}>
-        {/* Шапка */}
         <div style={{
           padding: '12px 14px',
           borderBottom: `1px solid ${theme.panelBorder}`,
@@ -260,15 +259,14 @@ export default function AdminTickets({
           </div>
         </div>
 
-        {/* Тело */}
         <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-          {/* СПИСОК ТИКЕТОВ */}
           {showList && (
             <div style={{
               width: isMobile ? '100%' : (selectedId ? 220 : '100%'),
               maxWidth: isMobile ? '100%' : 260,
               borderRight: (!isMobile && selectedId) ? `1px solid ${theme.panelBorder}` : 'none',
               overflowY: 'auto',
+              WebkitOverflowScrolling: 'touch',
               background: theme.bg,
               flexShrink: 0,
             }}>
@@ -342,7 +340,6 @@ export default function AdminTickets({
             </div>
           )}
 
-          {/* ПЕРЕПИСКА */}
           {showDetail && selectedId && (
             <div style={{
               flex: 1,
@@ -361,7 +358,6 @@ export default function AdminTickets({
 
               {!detailLoading && selected && (
                 <>
-                  {/* Шапка тикета */}
                   <div style={{
                     padding: '10px 12px',
                     borderBottom: `1px solid ${theme.panelBorder}`,
@@ -447,10 +443,10 @@ export default function AdminTickets({
                     </div>
                   </div>
 
-                  {/* Сообщения */}
                   <div style={{
                     flex: 1,
                     overflowY: 'auto',
+                    WebkitOverflowScrolling: 'touch',
                     padding: 12,
                     display: 'flex',
                     flexDirection: 'column',
@@ -510,7 +506,6 @@ export default function AdminTickets({
                     <div ref={endRef} />
                   </div>
 
-                  {/* Поле ответа */}
                   {selected.status === 'open' ? (
                     <div style={{
                       padding: 10,

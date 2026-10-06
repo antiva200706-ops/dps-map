@@ -250,7 +250,6 @@ export default function ChatPanel({
         overflow: 'hidden',
         fontSize: `${14 * textScale}px`,
       }}>
-        {/* Шапка */}
         <div style={{
           padding: '12px 14px',
           borderBottom: `1px solid ${theme.panelBorder}`,
@@ -301,7 +300,6 @@ export default function ChatPanel({
           >×</button>
         </div>
 
-        {/* Табы */}
         <div style={{
           display: 'flex',
           padding: '8px 10px',
@@ -347,12 +345,12 @@ export default function ChatPanel({
           >🛡 Админ</button>
         </div>
 
-        {/* === ОБЩИЙ ЧАТ === */}
         {tab === 'general' && (
           <>
             <div style={{
               flex: 1,
               overflowY: 'auto',
+              WebkitOverflowScrolling: 'touch',
               padding: 12,
               display: 'flex',
               flexDirection: 'column',
@@ -496,7 +494,6 @@ export default function ChatPanel({
           </>
         )}
 
-        {/* === ТИКЕТ === */}
         {tab === 'ticket' && (
           <>
             {ticketLoading && (
@@ -566,6 +563,7 @@ export default function ChatPanel({
                 <div style={{
                   flex: 1,
                   overflowY: 'auto',
+                  WebkitOverflowScrolling: 'touch',
                   padding: 12,
                   display: 'flex',
                   flexDirection: 'column',
