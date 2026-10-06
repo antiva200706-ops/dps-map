@@ -5,6 +5,7 @@ import axios from 'axios';
 import 'leaflet/dist/leaflet.css';
 import RoutePanel from './RoutePanel';
 import ChatPanel from './ChatPanel';
+import AdminTickets from './AdminTickets';
 
 const API = '';
 const ADMIN_NAME = 'Администратор';
@@ -444,6 +445,7 @@ export default function App() {
   const [stats, setStats] = useState({ users_total: 0, users_online: 0 });
 
   const [showChat, setShowChat] = useState(false);
+  const [showAdminTickets, setShowAdminTickets] = useState(false);
 
   const [alert, setAlert] = useState(null);
   const alertTimerRef = useRef(null);
@@ -1658,6 +1660,17 @@ export default function App() {
                   </div>
 
                   <button
+                    onClick={() => setShowAdminTickets(true)}
+                    style={{
+                      padding: 12, borderRadius: 12, border: 'none',
+                      background: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
+                      color: 'white', cursor: 'pointer',
+                      fontSize: `${14 * textScale}px`, fontWeight: 600,
+                      boxShadow: '0 3px 10px rgba(124,58,237,0.3)',
+                    }}
+                  >🎫 Чаты обращений</button>
+
+                  <button
                     onClick={testAlert}
                     style={{
                       padding: 12, borderRadius: 12, border: 'none',
@@ -1790,6 +1803,19 @@ export default function App() {
           adminPassword={adminPassword}
           isModerator={isModerator}
           onClose={() => setShowChat(false)}
+        />
+      )}
+
+      {showAdminTickets && (
+        <AdminTickets
+          api={api}
+          theme={theme}
+          textScale={textScale}
+          getDeviceId={getDeviceId}
+          isAdmin={isAdmin}
+          isModerator={isModerator}
+          adminPassword={adminPassword}
+          onClose={() => setShowAdminTickets(false)}
         />
       )}
     </div>
