@@ -1467,6 +1467,7 @@ export default function App() {
                     {targetUser.is_banned ? '🚫 забанен' : '✅ активен'}
                     {targetUser.is_moderator && ' • 🛡 модератор'}
                     {!targetUser.can_post && ' • ✋ нет права меток'}
+                    {targetUser.chat_banned && ' • 🚫 нет права СМС'}
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1493,6 +1494,18 @@ export default function App() {
                         fontSize: `${13 * textScale}px`, fontWeight: 600,
                       }}
                     >{targetUser.can_post ? '✋ Запретить метки' : '✅ Разрешить метки'}</button>
+
+                    <button
+                      onClick={() => userAction(targetUser.chat_banned ? 'chat_unban' : 'chat_ban')}
+                      style={{
+                        padding: 10, borderRadius: 10, border: 'none',
+                        background: targetUser.chat_banned
+                          ? 'linear-gradient(135deg, #16a34a, #15803d)'
+                          : 'linear-gradient(135deg, #7c3aed, #6d28d9)',
+                        color: 'white', cursor: 'pointer',
+                        fontSize: `${13 * textScale}px`, fontWeight: 600,
+                      }}
+                    >{targetUser.chat_banned ? '✅ Разрешить СМС' : '🚫 Запретить СМС'}</button>
 
                     <button
                       onClick={() => userAction(targetUser.is_moderator ? 'remove_moderator' : 'make_moderator')}

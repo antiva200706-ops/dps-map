@@ -102,6 +102,7 @@ app.get('/me', requireDevice, (req, res) => {
     is_moderator: req.user.is_moderator,
     is_banned: req.user.is_banned,
     can_post: req.user.can_post,
+    chat_banned: req.user.chat_banned,
   });
 });
 
@@ -536,6 +537,7 @@ app.post('/admin/delete-all', async (req, res) => {
   res.json({ ok: true });
 });
 
+// Управление юзером (с chat_ban / chat_unban)
 app.post('/admin/user/:publicId/action', async (req, res) => {
   const pass = req.header('X-Admin-Password');
   if (pass !== ADMIN_PASSWORD) return res.status(401).json({ error: 'unauthorized' });
@@ -555,6 +557,10 @@ app.post('/admin/user/:publicId/action', async (req, res) => {
     await db.query(`UPDATE users SET can_post = false WHERE public_id = $1`, [publicId]);
   } else if (action === 'allow_post') {
     await db.query(`UPDATE users SET can_post = true WHERE public_id = $1`, [publicId]);
+  } else if (action === 'chat_ban') {
+    await db.query(`UPDATE users SET chat_banned = true WHERE public_id = $1`, [publicId]);
+  } else if (action === 'chat_unban') {
+    await db.query(`UPDATE users SET chat_banned = false WHERE public_id = $1`, [publicId]);
   } else if (action === 'make_moderator') {
     await db.query(
       `UPDATE users SET is_moderator = true, name = $1 WHERE public_id = $2`,
@@ -572,7 +578,7 @@ app.post('/admin/user/:publicId/action', async (req, res) => {
   }
 
   const updated = await db.query(
-    `SELECT public_id, name, is_moderator, is_banned, can_post FROM users WHERE public_id = $1`,
+    `SELECT public_id, name, is_moderator, is_banned, can_post, COALESCE(chat_banned, false) AS chat_banned FROM users WHERE public_id = $1`,
     [publicId]
   );
   res.json({ ok: true, user: updated.rows[0] });
@@ -624,13 +630,18 @@ io.on('connection', (socket) => {
       if (message.length > 1000) return;
 
       const userRes = await db.query(
-        `SELECT id, name, public_id, is_banned FROM users WHERE device_id = $1`,
+        `SELECT id, name, public_id, is_banned, COALESCE(chat_banned, false) AS chat_banned FROM users WHERE device_id = $1`,
         [deviceId]
       );
       if (!userRes.rows.length) return;
       const user = userRes.rows[0];
+
       if (user.is_banned) {
         socket.emit('chat:error', { error: 'Вы заблокированы' });
+        return;
+      }
+      if (user.chat_banned) {
+        socket.emit('chat:error', { error: '🚫 Вам запрещено писать в чат' });
         return;
       }
 
@@ -684,11 +695,12 @@ io.on('connection', (socket) => {
       if (message.length > 1000) return;
 
       const userRes = await db.query(
-        `SELECT id, name, public_id, is_banned, is_moderator FROM users WHERE device_id = $1`,
+        `SELECT id, name, public_id, is_banned, is_moderator, COALESCE(chat_banned, false) AS chat_banned FROM users WHERE device_id = $1`,
         [deviceId]
       );
       if (!userRes.rows.length) return;
       const user = userRes.rows[0];
+
       if (user.is_banned) {
         socket.emit('ticket:error', { error: 'Вы заблокированы' });
         return;
@@ -697,6 +709,12 @@ io.on('connection', (socket) => {
       const isAdminPass = socket.handshake.auth?.isAdmin;
       const isMod = user.is_moderator;
       const isAdminRole = !!isAdminPass || !!isMod;
+
+      // chat_banned блокирует обычных юзеров, но НЕ админов/модераторов
+      if (user.chat_banned && !isAdminRole) {
+        socket.emit('ticket:error', { error: '🚫 Вам запрещено писать в чат' });
+        return;
+      }
 
       const ticketCheck = await db.query(
         `SELECT id, user_id, status FROM tickets WHERE id = $1`,
@@ -723,7 +741,6 @@ io.on('connection', (socket) => {
 
       const msg = rows[0];
 
-      // Если пишет пользователь (не админ) — вернуть тикет в список админа
       if (!authorIsAdmin) {
         await db.query(
           `UPDATE tickets SET deleted_by_admin = false WHERE id = $1`,
