@@ -761,6 +761,7 @@ export default function App() {
 
   const appStyle = {
     height: '100vh',
+    height: '100dvh',
     width: '100%',
     position: 'fixed',
     top: 0,
@@ -1191,6 +1192,8 @@ export default function App() {
           gap: 12,
           overflowY: 'auto',
           WebkitOverflowScrolling: 'touch',
+          overscrollBehavior: 'contain',
+          touchAction: 'pan-y',
           fontSize: `${14 * textScale}px`,
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
