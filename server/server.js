@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import { Pool } from 'pg';
 import path from 'path';
+import http from 'http';
+import { Server as SocketIOServer } from 'socket.io';
 import { fileURLToPath } from 'url';
 import 'dotenv/config';
 
@@ -103,7 +105,6 @@ app.get('/me', requireDevice, (req, res) => {
   });
 });
 
-// === СТАТИСТИКА: всего юзеров + онлайн (за 5 минут) ===
 app.get('/stats', requireDevice, async (req, res) => {
   try {
     const total = await db.query(`SELECT COUNT(*)::int AS c FROM users`);
@@ -326,6 +327,46 @@ app.post('/route', requireDevice, async (req, res) => {
   }
 });
 
+// === ЧАТ ===
+
+// Получить 200 последних сообщений
+app.get('/chat/history', requireDevice, async (req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT id, author_name, author_public_id, message, created_at
+       FROM (
+         SELECT m.id, m.author_name, u.public_id AS author_public_id, m.message, m.created_at
+         FROM chat_messages m
+         LEFT JOIN users u ON u.id = m.user_id
+         ORDER BY m.created_at DESC
+         LIMIT 200
+       ) t
+       ORDER BY created_at ASC`
+    );
+    res.json(rows);
+  } catch (e) {
+    console.error('Chat history error:', e);
+    res.status(500).json({ error: 'chat history failed' });
+  }
+});
+
+// Удалить сообщение (админ/модератор)
+app.post('/chat/delete/:id', requireDevice, async (req, res) => {
+  const role = isAdminOrModerator(req);
+  if (!role) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    await db.query(`DELETE FROM chat_messages WHERE id = $1`, [req.params.id]);
+    // Оповестить всех через Socket.IO
+    io.emit('chat:deleted', req.params.id);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Chat delete error:', e);
+    res.status(500).json({ error: 'delete failed' });
+  }
+});
+
+// === АДМИНСКИЕ РОУТЫ ===
+
 app.post('/admin/pin/:id', requireDevice, async (req, res) => {
   const role = isAdminOrModerator(req);
   if (!role) return res.status(401).json({ error: 'unauthorized' });
@@ -413,4 +454,100 @@ app.get(/.*/, (req, res) => {
   res.sendFile(path.join(clientDist, 'index.html'));
 });
 
-app.listen(3000, () => console.log('server on http://localhost:3000'));
+// === HTTP + Socket.IO ===
+const server = http.createServer(app);
+const io = new SocketIOServer(server, {
+  cors: { origin: '*' },
+});
+
+// Храним список онлайн в чате (deviceId -> {name, public_id})
+const chatOnline = new Map();
+
+function broadcastOnline() {
+  const users = Array.from(chatOnline.values());
+  io.emit('chat:online', {
+    count: users.length,
+    users,
+  });
+}
+
+io.on('connection', (socket) => {
+  const deviceId = socket.handshake.auth?.deviceId;
+  const userName = socket.handshake.auth?.name || 'Аноним';
+  const publicId = socket.handshake.auth?.publicId;
+
+  if (deviceId) {
+    chatOnline.set(socket.id, {
+      deviceId,
+      name: userName,
+      public_id: publicId,
+    });
+    broadcastOnline();
+  }
+
+  // Новое сообщение
+  socket.on('chat:send', async (payload) => {
+    try {
+      const deviceId = socket.handshake.auth?.deviceId;
+      if (!deviceId) return;
+
+      const { message } = payload || {};
+      if (!message || !message.trim()) return;
+      if (message.length > 1000) return;
+
+      // Найти юзера по device_id
+      const userRes = await db.query(
+        `SELECT id, name, public_id, is_banned FROM users WHERE device_id = $1`,
+        [deviceId]
+      );
+      if (!userRes.rows.length) return;
+      const user = userRes.rows[0];
+      if (user.is_banned) {
+        socket.emit('chat:error', { error: 'Вы заблокированы' });
+        return;
+      }
+
+      const authorName = user.name || 'Аноним';
+      const authorPublicId = user.public_id;
+
+      // Вставить в БД
+      const { rows } = await db.query(
+        `INSERT INTO chat_messages (user_id, author_name, message)
+         VALUES ($1, $2, $3)
+         RETURNING id, author_name, message, created_at`,
+        [user.id, authorName, message.trim()]
+      );
+
+      const msg = rows[0];
+
+      // Обрезаем историю: оставляем только 200 последних
+      await db.query(
+        `DELETE FROM chat_messages
+         WHERE id IN (
+           SELECT id FROM chat_messages
+           ORDER BY created_at DESC
+           OFFSET 200
+         )`
+      );
+
+      // Отправить всем
+      io.emit('chat:message', {
+        id: msg.id,
+        author_name: msg.author_name,
+        author_public_id: authorPublicId,
+        message: msg.message,
+        created_at: msg.created_at,
+      });
+    } catch (e) {
+      console.error('chat:send error:', e);
+      socket.emit('chat:error', { error: 'Ошибка отправки' });
+    }
+  });
+
+  socket.on('disconnect', () => {
+    chatOnline.delete(socket.id);
+    broadcastOnline();
+  });
+});
+
+server.listen(3000, () => console.log('server on http://localhost:3000'));

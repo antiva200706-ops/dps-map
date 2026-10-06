@@ -4,6 +4,7 @@ import L from 'leaflet';
 import axios from 'axios';
 import 'leaflet/dist/leaflet.css';
 import RoutePanel from './RoutePanel';
+import ChatPanel from './ChatPanel';
 
 const API = '';
 const ADMIN_NAME = 'Администратор';
@@ -442,6 +443,8 @@ export default function App() {
   const [speedLimit, setSpeedLimit] = useState(null);
   const [stats, setStats] = useState({ users_total: 0, users_online: 0 });
 
+  const [showChat, setShowChat] = useState(false);
+
   const [alert, setAlert] = useState(null);
   const alertTimerRef = useRef(null);
 
@@ -710,7 +713,6 @@ export default function App() {
 
     const refresh = setInterval(() => loadMarkers(), 20000);
 
-    // === Статистика юзеров ===
     api.get('/stats').then(r => setStats(r.data)).catch(() => {});
     const statsInterval = setInterval(() => {
       api.get('/stats').then(r => setStats(r.data)).catch(() => {});
@@ -934,6 +936,32 @@ export default function App() {
         </div>
       )}
 
+      {/* Кнопка чата */}
+      <button
+        onClick={() => setShowChat(true)}
+        style={{
+          position: 'absolute',
+          top: 12,
+          right: 130,
+          background: 'linear-gradient(135deg, #1d9bf0, #0e71b8)',
+          color: 'white',
+          border: 'none',
+          padding: `${10 * textScale}px ${14 * textScale}px`,
+          borderRadius: 12,
+          boxShadow: '0 3px 12px rgba(29,155,240,0.4)',
+          cursor: 'pointer',
+          fontSize: `${18 * textScale}px`,
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          fontWeight: 600,
+        }}
+        title="Чат"
+      >
+        💬
+      </button>
+
       <div
         onClick={() => setShowProfile(true)}
         style={{
@@ -974,7 +1002,7 @@ export default function App() {
         </div>
       )}
 
-      {/* === СТАТИСТИКА ЮЗЕРОВ === */}
+      {/* Статистика юзеров */}
       <div
         style={{
           position: 'absolute',
@@ -1747,6 +1775,21 @@ export default function App() {
           onStart={() => {
             setShowRoute(false);
           }}
+        />
+      )}
+
+      {showChat && (
+        <ChatPanel
+          api={api}
+          theme={theme}
+          textScale={textScale}
+          getDeviceId={getDeviceId}
+          profileName={profileName}
+          profileId={profileId}
+          isAdmin={isAdmin}
+          adminPassword={adminPassword}
+          isModerator={isModerator}
+          onClose={() => setShowChat(false)}
         />
       )}
     </div>
