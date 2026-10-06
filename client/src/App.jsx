@@ -447,6 +447,10 @@ export default function App() {
   const [showChat, setShowChat] = useState(false);
   const [showAdminTickets, setShowAdminTickets] = useState(false);
 
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== 'undefined' && window.innerWidth < 700
+  );
+
   const [alert, setAlert] = useState(null);
   const alertTimerRef = useRef(null);
 
@@ -726,6 +730,11 @@ export default function App() {
     };
     window.addEventListener('beforeinstallprompt', beforeInstallHandler);
 
+    function onResize() {
+      setIsMobile(window.innerWidth < 700);
+    }
+    window.addEventListener('resize', onResize);
+
     if (window.matchMedia('(display-mode: standalone)').matches) {
       setIsInstalled(true);
     }
@@ -738,6 +747,7 @@ export default function App() {
       clearInterval(refresh);
       clearInterval(statsInterval);
       window.removeEventListener('beforeinstallprompt', beforeInstallHandler);
+      window.removeEventListener('resize', onResize);
     };
   }, []);
 
@@ -757,6 +767,9 @@ export default function App() {
     color: theme.text,
     fontSize: `${14 * textScale}px`,
     fontFamily: 'system-ui, sans-serif',
+    overflow: 'hidden',
+    overscrollBehavior: 'none',
+    touchAction: 'pan-x pan-y pinch-zoom',
   };
 
   const speeding = speedLimit != null && mySpeed != null && mySpeed > speedLimit + 5;
@@ -1030,7 +1043,9 @@ export default function App() {
       {settings.speedometerEnabled && mySpeed != null && mySpeed > 15 && (
         <div
           style={{
-            position: 'absolute', bottom: 130, left: 12,
+            position: 'absolute',
+            bottom: isMobile ? 160 : 130,
+            left: 12,
             zIndex: 1000, display: 'flex', flexDirection: 'column',
             alignItems: 'center', gap: 6,
             userSelect: 'none',
@@ -1111,7 +1126,7 @@ export default function App() {
         onClick={() => setShowRoute(true)}
         style={{
           position: 'absolute',
-          bottom: 194,
+          bottom: isMobile ? 224 : 194,
           right: 12,
           width: 52,
           height: 52,
@@ -1136,14 +1151,22 @@ export default function App() {
       <button
         onClick={goToMe}
         style={{
-          position: 'absolute', bottom: 130, right: 12,
-          width: 52, height: 52, borderRadius: '50%',
+          position: 'absolute',
+          bottom: isMobile ? 160 : 130,
+          right: 12,
+          width: 52,
+          height: 52,
+          borderRadius: '50%',
           border: 'none',
           background: 'linear-gradient(135deg, #1d9bf0, #0e71b8)',
-          color: 'white', cursor: 'pointer',
+          color: 'white',
+          cursor: 'pointer',
           boxShadow: '0 4px 14px rgba(29,155,240,0.4)',
-          zIndex: 1000, display: 'flex',
-          alignItems: 'center', justifyContent: 'center', padding: 0,
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 0,
         }}
         title="Я здесь"
       >
