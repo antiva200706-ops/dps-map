@@ -25,7 +25,6 @@ export default function AdminTickets({
   const socketRef = useRef(null);
   const endRef = useRef(null);
 
-  // Отслеживаем ширину экрана (для мобильного режима)
   useEffect(() => {
     function onResize() {
       setIsMobile(window.innerWidth < 700);
@@ -104,6 +103,10 @@ export default function AdminTickets({
 
   async function deleteTicket() {
     if (!selected?.id) return;
+    if (selected.status !== 'closed') {
+      alert('Сначала закройте тикет, потом удаляйте');
+      return;
+    }
     if (!confirm('Удалить чат у себя? Пользователь по-прежнему увидит обращение.')) return;
     try {
       await api.post(`/admin/tickets/${selected.id}/delete`, {}, {
@@ -176,7 +179,6 @@ export default function AdminTickets({
     };
   }, []);
 
-  // НА МОБИЛЬНОМ: показываем ЛИБО список, ЛИБО переписку
   const showList = !isMobile || !selectedId;
   const showDetail = !isMobile || selectedId;
 
@@ -395,7 +397,7 @@ export default function AdminTickets({
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                      {selected.status === 'open' && (
+                      {selected.status === 'open' ? (
                         <button
                           onClick={closeTicket}
                           style={{
@@ -410,23 +412,24 @@ export default function AdminTickets({
                             whiteSpace: 'nowrap',
                           }}
                           title="Закрыть тикет"
-                        >✅</button>
+                        >✅ Закрыть</button>
+                      ) : (
+                        <button
+                          onClick={deleteTicket}
+                          style={{
+                            padding: '8px 10px',
+                            borderRadius: 8,
+                            border: 'none',
+                            background: 'linear-gradient(135deg, #dc2626, #991b1b)',
+                            color: 'white',
+                            cursor: 'pointer',
+                            fontSize: 12,
+                            fontWeight: 600,
+                            whiteSpace: 'nowrap',
+                          }}
+                          title="Удалить у себя"
+                        >🗑 Удалить</button>
                       )}
-                      <button
-                        onClick={deleteTicket}
-                        style={{
-                          padding: '8px 10px',
-                          borderRadius: 8,
-                          border: 'none',
-                          background: 'linear-gradient(135deg, #dc2626, #991b1b)',
-                          color: 'white',
-                          cursor: 'pointer',
-                          fontSize: 12,
-                          fontWeight: 600,
-                          whiteSpace: 'nowrap',
-                        }}
-                        title="Удалить у себя"
-                      >🗑</button>
                       <button
                         onClick={() => { setSelectedId(null); setSelected(null); }}
                         style={{
