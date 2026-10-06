@@ -364,7 +364,6 @@ app.post('/chat/delete/:id', requireDevice, async (req, res) => {
 
 // === ТИКЕТЫ (личка с админом) ===
 
-// Получить мой открытый тикет (или null)
 app.get('/tickets/my', requireDevice, async (req, res) => {
   try {
     const { rows } = await db.query(
@@ -392,10 +391,8 @@ app.get('/tickets/my', requireDevice, async (req, res) => {
   }
 });
 
-// Создать новый тикет (или использовать открытый)
 app.post('/tickets/open', requireDevice, async (req, res) => {
   try {
-    // Если есть открытый — вернём его
     const existing = await db.query(
       `SELECT id FROM tickets WHERE user_id = $1 AND status = 'open' ORDER BY created_at DESC LIMIT 1`,
       [req.user.id]
@@ -416,7 +413,7 @@ app.post('/tickets/open', requireDevice, async (req, res) => {
 
 // === АДМИНСКИЕ РОУТЫ ===
 
-// Список всех тикетов (для админа)
+// Список всех тикетов (только НЕ удалённые админом)
 app.get('/admin/tickets', requireDevice, async (req, res) => {
   const role = isAdminOrModerator(req);
   if (!role) return res.status(401).json({ error: 'unauthorized' });
@@ -429,6 +426,7 @@ app.get('/admin/tickets', requireDevice, async (req, res) => {
               (SELECT created_at FROM ticket_messages WHERE ticket_id = t.id ORDER BY created_at DESC LIMIT 1) AS last_message_at
        FROM tickets t
        LEFT JOIN users u ON u.id = t.user_id
+       WHERE COALESCE(t.deleted_by_admin, false) = false
        ORDER BY 
          CASE WHEN t.status = 'open' THEN 0 ELSE 1 END,
          COALESCE((SELECT created_at FROM ticket_messages WHERE ticket_id = t.id ORDER BY created_at DESC LIMIT 1), t.created_at) DESC`
@@ -440,7 +438,6 @@ app.get('/admin/tickets', requireDevice, async (req, res) => {
   }
 });
 
-// Получить сообщения конкретного тикета
 app.get('/admin/tickets/:id', requireDevice, async (req, res) => {
   const role = isAdminOrModerator(req);
   if (!role) return res.status(401).json({ error: 'unauthorized' });
@@ -468,7 +465,6 @@ app.get('/admin/tickets/:id', requireDevice, async (req, res) => {
   }
 });
 
-// Закрыть тикет
 app.post('/admin/tickets/:id/close', requireDevice, async (req, res) => {
   const role = isAdminOrModerator(req);
   if (!role) return res.status(401).json({ error: 'unauthorized' });
@@ -482,6 +478,22 @@ app.post('/admin/tickets/:id/close', requireDevice, async (req, res) => {
   } catch (e) {
     console.error('Close ticket error:', e);
     res.status(500).json({ error: 'close failed' });
+  }
+});
+
+// Удалить тикет у админа (у юзера остаётся)
+app.post('/admin/tickets/:id/delete', requireDevice, async (req, res) => {
+  const role = isAdminOrModerator(req);
+  if (!role) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    await db.query(
+      `UPDATE tickets SET deleted_by_admin = true WHERE id = $1`,
+      [req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Delete ticket error:', e);
+    res.status(500).json({ error: 'delete failed' });
   }
 });
 
@@ -604,7 +616,6 @@ io.on('connection', (socket) => {
     broadcastOnline();
   }
 
-  // === ОБЩИЙ ЧАТ ===
   socket.on('chat:send', async (payload) => {
     try {
       const deviceId = socket.handshake.auth?.deviceId;
@@ -659,7 +670,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // === ТИКЕТЫ ===
   socket.on('ticket:join', (ticketId) => {
     if (ticketId) {
       socket.join(`ticket-${ticketId}`);
@@ -675,7 +685,6 @@ io.on('connection', (socket) => {
       if (!ticketId || !message || !message.trim()) return;
       if (message.length > 1000) return;
 
-      // Проверяем, что юзер имеет право писать в этот тикет
       const userRes = await db.query(
         `SELECT id, name, public_id, is_banned, is_moderator FROM users WHERE device_id = $1`,
         [deviceId]
@@ -687,7 +696,6 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Если не админ — проверяем что тикет его
       const isAdminPass = socket.handshake.auth?.isAdmin;
       const isMod = user.is_moderator;
       const isAdminRole = !!isAdminPass || !!isMod;
@@ -699,7 +707,6 @@ io.on('connection', (socket) => {
       if (!ticketCheck.rows.length) return;
       const ticket = ticketCheck.rows[0];
 
-      // Юзер может писать только в свой тикет
       if (!isAdminRole && ticket.user_id !== user.id) return;
       if (ticket.status === 'closed' && !isAdminRole) {
         socket.emit('ticket:error', { error: 'Обращение закрыто' });

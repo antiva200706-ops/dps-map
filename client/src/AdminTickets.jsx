@@ -20,9 +20,19 @@ export default function AdminTickets({
   const [detailLoading, setDetailLoading] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [connected, setConnected] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 700);
 
   const socketRef = useRef(null);
   const endRef = useRef(null);
+
+  // Отслеживаем ширину экрана (для мобильного режима)
+  useEffect(() => {
+    function onResize() {
+      setIsMobile(window.innerWidth < 700);
+    }
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   function formatTime(iso) {
     const date = new Date(iso);
@@ -92,6 +102,23 @@ export default function AdminTickets({
     }
   }
 
+  async function deleteTicket() {
+    if (!selected?.id) return;
+    if (!confirm('Удалить чат у себя? Пользователь по-прежнему увидит обращение.')) return;
+    try {
+      await api.post(`/admin/tickets/${selected.id}/delete`, {}, {
+        headers: adminPassword
+          ? { 'X-Admin-Password': adminPassword }
+          : {},
+      });
+      setSelectedId(null);
+      setSelected(null);
+      loadTickets();
+    } catch (e) {
+      alert('Ошибка удаления');
+    }
+  }
+
   function sendReply() {
     const text = replyText.trim();
     if (!text || !selected?.id) return;
@@ -130,13 +157,11 @@ export default function AdminTickets({
     socket.on('disconnect', () => setConnected(false));
 
     socket.on('ticket:message', (msg) => {
-      // Добавляем в открытый тикет
       setSelected((prev) => {
         if (!prev || prev.id !== msg.ticket_id) return prev;
         return { ...prev, messages: [...prev.messages, msg] };
       });
       setTimeout(scrollToBottom, 50);
-      // Обновляем список
       loadTickets();
     });
 
@@ -151,6 +176,10 @@ export default function AdminTickets({
     };
   }, []);
 
+  // НА МОБИЛЬНОМ: показываем ЛИБО список, ЛИБО переписку
+  const showList = !isMobile || !selectedId;
+  const showDetail = !isMobile || selectedId;
+
   return (
     <div style={{
       position: 'fixed',
@@ -160,16 +189,16 @@ export default function AdminTickets({
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      padding: 12,
+      padding: isMobile ? 0 : 12,
     }}>
       <div style={{
         width: '100%',
         maxWidth: 720,
-        height: '88vh',
+        height: isMobile ? '100vh' : '88vh',
         maxHeight: 850,
         background: theme.panel,
         color: theme.text,
-        borderRadius: 20,
+        borderRadius: isMobile ? 0 : 20,
         boxShadow: `0 20px 60px ${theme.shadow}`,
         display: 'flex',
         flexDirection: 'column',
@@ -178,16 +207,17 @@ export default function AdminTickets({
       }}>
         {/* Шапка */}
         <div style={{
-          padding: '14px 16px',
+          padding: '12px 14px',
           borderBottom: `1px solid ${theme.panelBorder}`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: 10,
+          flexShrink: 0,
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
             <span style={{ fontSize: 22 }}>🎫</span>
-            <div>
+            <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: `${15 * textScale}px` }}>
                 Чаты обращений
               </div>
@@ -199,18 +229,19 @@ export default function AdminTickets({
               </div>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
             <button
               onClick={loadTickets}
               style={{
                 border: 'none',
                 background: theme.card,
                 color: theme.text,
-                padding: '8px 12px',
+                padding: '8px 10px',
                 borderRadius: 8,
-                fontSize: 13,
+                fontSize: 14,
                 cursor: 'pointer',
               }}
+              title="Обновить"
             >🔄</button>
             <button
               onClick={onClose}
@@ -218,102 +249,105 @@ export default function AdminTickets({
                 border: 'none',
                 background: theme.card,
                 color: theme.text,
-                width: 36, height: 36,
+                width: 34, height: 34,
                 borderRadius: 10,
-                fontSize: 20,
+                fontSize: 18,
                 cursor: 'pointer',
               }}
             >×</button>
           </div>
         </div>
 
-        {/* Тело: список + переписка */}
+        {/* Тело */}
         <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
           {/* СПИСОК ТИКЕТОВ */}
-          <div style={{
-            width: selectedId ? 220 : '100%',
-            maxWidth: 260,
-            borderRight: selectedId ? `1px solid ${theme.panelBorder}` : 'none',
-            overflowY: 'auto',
-            background: theme.bg,
-            flexShrink: 0,
-          }}>
-            {loading && (
-              <div style={{
-                padding: 20, textAlign: 'center',
-                color: theme.textMuted, fontSize: `${13 * textScale}px`,
-              }}>Загрузка...</div>
-            )}
+          {showList && (
+            <div style={{
+              width: isMobile ? '100%' : (selectedId ? 220 : '100%'),
+              maxWidth: isMobile ? '100%' : 260,
+              borderRight: (!isMobile && selectedId) ? `1px solid ${theme.panelBorder}` : 'none',
+              overflowY: 'auto',
+              background: theme.bg,
+              flexShrink: 0,
+            }}>
+              {loading && (
+                <div style={{
+                  padding: 20, textAlign: 'center',
+                  color: theme.textMuted, fontSize: `${13 * textScale}px`,
+                }}>Загрузка...</div>
+              )}
 
-            {!loading && tickets.length === 0 && (
-              <div style={{
-                padding: 20, textAlign: 'center',
-                color: theme.textMuted, fontSize: `${13 * textScale}px`,
-              }}>Пока нет обращений</div>
-            )}
+              {!loading && tickets.length === 0 && (
+                <div style={{
+                  padding: 20, textAlign: 'center',
+                  color: theme.textMuted, fontSize: `${13 * textScale}px`,
+                }}>Пока нет обращений</div>
+              )}
 
-            {tickets.map(t => (
-              <div
-                key={t.id}
-                onClick={() => openTicket(t.id)}
-                style={{
-                  padding: 12,
-                  borderBottom: `1px solid ${theme.panelBorder}`,
-                  cursor: 'pointer',
-                  background: selectedId === t.id ? theme.card : 'transparent',
-                  transition: 'background 0.15s',
-                }}
-              >
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: 4,
-                }}>
-                  <b style={{ fontSize: `${13 * textScale}px` }}>
-                    {t.user_name || 'Аноним'}
-                    {t.user_public_id && (
-                      <span style={{
-                        fontWeight: 400,
-                        color: theme.textMuted,
-                        marginLeft: 4,
-                      }}>#{t.user_public_id}</span>
-                    )}
-                  </b>
-                  <span style={{ fontSize: 14 }}>
-                    {t.status === 'open' ? '🟢' : '✅'}
-                  </span>
+              {tickets.map(t => (
+                <div
+                  key={t.id}
+                  onClick={() => openTicket(t.id)}
+                  style={{
+                    padding: 12,
+                    borderBottom: `1px solid ${theme.panelBorder}`,
+                    cursor: 'pointer',
+                    background: (!isMobile && selectedId === t.id) ? theme.card : 'transparent',
+                    transition: 'background 0.15s',
+                  }}
+                >
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: 4,
+                  }}>
+                    <b style={{ fontSize: `${13 * textScale}px` }}>
+                      {t.user_name || 'Аноним'}
+                      {t.user_public_id && (
+                        <span style={{
+                          fontWeight: 400,
+                          color: theme.textMuted,
+                          marginLeft: 4,
+                        }}>#{t.user_public_id}</span>
+                      )}
+                    </b>
+                    <span style={{ fontSize: 14 }}>
+                      {t.status === 'open' ? '🟢' : '✅'}
+                    </span>
+                  </div>
+                  <div style={{
+                    fontSize: `${11 * textScale}px`,
+                    color: theme.textMuted,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {t.last_message || 'Нет сообщений'}
+                  </div>
+                  <div style={{
+                    fontSize: `${10 * textScale}px`,
+                    color: theme.textMuted,
+                    marginTop: 3,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                  }}>
+                    <span>{t.last_message_at ? formatTime(t.last_message_at) : formatTime(t.created_at)}</span>
+                    <span>💬 {t.messages_count}</span>
+                  </div>
                 </div>
-                <div style={{
-                  fontSize: `${11 * textScale}px`,
-                  color: theme.textMuted,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}>
-                  {t.last_message || 'Нет сообщений'}
-                </div>
-                <div style={{
-                  fontSize: `${10 * textScale}px`,
-                  color: theme.textMuted,
-                  marginTop: 3,
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                }}>
-                  <span>{t.last_message_at ? formatTime(t.last_message_at) : formatTime(t.created_at)}</span>
-                  <span>💬 {t.messages_count}</span>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
 
           {/* ПЕРЕПИСКА */}
-          {selectedId && (
+          {showDetail && selectedId && (
             <div style={{
               flex: 1,
               display: 'flex',
               flexDirection: 'column',
               minWidth: 0,
+              width: isMobile ? '100%' : 'auto',
             }}>
               {detailLoading && (
                 <div style={{
@@ -327,14 +361,15 @@ export default function AdminTickets({
                 <>
                   {/* Шапка тикета */}
                   <div style={{
-                    padding: '10px 14px',
+                    padding: '10px 12px',
                     borderBottom: `1px solid ${theme.panelBorder}`,
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
-                    gap: 10,
+                    gap: 8,
+                    flexShrink: 0,
                   }}>
-                    <div style={{ minWidth: 0 }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{
                         fontSize: `${13 * textScale}px`,
                         fontWeight: 700,
@@ -359,12 +394,12 @@ export default function AdminTickets({
                         {selected.status === 'open' ? '🟢 Открыт' : '✅ Закрыт'}
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 6 }}>
+                    <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
                       {selected.status === 'open' && (
                         <button
                           onClick={closeTicket}
                           style={{
-                            padding: '8px 12px',
+                            padding: '8px 10px',
                             borderRadius: 8,
                             border: 'none',
                             background: 'linear-gradient(135deg, #16a34a, #15803d)',
@@ -374,12 +409,28 @@ export default function AdminTickets({
                             fontWeight: 600,
                             whiteSpace: 'nowrap',
                           }}
-                        >✅ Закрыть</button>
+                          title="Закрыть тикет"
+                        >✅</button>
                       )}
+                      <button
+                        onClick={deleteTicket}
+                        style={{
+                          padding: '8px 10px',
+                          borderRadius: 8,
+                          border: 'none',
+                          background: 'linear-gradient(135deg, #dc2626, #991b1b)',
+                          color: 'white',
+                          cursor: 'pointer',
+                          fontSize: 12,
+                          fontWeight: 600,
+                          whiteSpace: 'nowrap',
+                        }}
+                        title="Удалить у себя"
+                      >🗑</button>
                       <button
                         onClick={() => { setSelectedId(null); setSelected(null); }}
                         style={{
-                          padding: '8px 12px',
+                          padding: '8px 10px',
                           borderRadius: 8,
                           border: `1px solid ${theme.inputBorder}`,
                           background: theme.card,
@@ -388,7 +439,8 @@ export default function AdminTickets({
                           fontSize: 12,
                           whiteSpace: 'nowrap',
                         }}
-                      >← Назад</button>
+                        title="Назад"
+                      >←</button>
                     </div>
                   </div>
 
@@ -396,7 +448,7 @@ export default function AdminTickets({
                   <div style={{
                     flex: 1,
                     overflowY: 'auto',
-                    padding: 14,
+                    padding: 12,
                     display: 'flex',
                     flexDirection: 'column',
                     gap: 10,
@@ -458,12 +510,13 @@ export default function AdminTickets({
                   {/* Поле ответа */}
                   {selected.status === 'open' ? (
                     <div style={{
-                      padding: 12,
+                      padding: 10,
                       borderTop: `1px solid ${theme.panelBorder}`,
                       display: 'flex',
-                      gap: 8,
+                      gap: 6,
                       alignItems: 'flex-end',
-                      paddingBottom: 'max(12px, env(safe-area-inset-bottom))',
+                      paddingBottom: 'max(10px, env(safe-area-inset-bottom))',
+                      flexShrink: 0,
                     }}>
                       <textarea
                         value={replyText}
@@ -473,7 +526,7 @@ export default function AdminTickets({
                         rows={1}
                         style={{
                           flex: 1,
-                          padding: 12,
+                          padding: 10,
                           borderRadius: 12,
                           border: `1px solid ${theme.inputBorder}`,
                           background: theme.input,
@@ -482,14 +535,15 @@ export default function AdminTickets({
                           resize: 'none',
                           outline: 'none',
                           fontFamily: 'inherit',
-                          maxHeight: 100,
+                          maxHeight: 90,
+                          minWidth: 0,
                         }}
                       />
                       <button
                         onClick={sendReply}
                         disabled={!replyText.trim() || !connected}
                         style={{
-                          padding: '12px 16px',
+                          padding: '10px 14px',
                           borderRadius: 12,
                           border: 'none',
                           background: replyText.trim() && connected
@@ -499,6 +553,7 @@ export default function AdminTickets({
                           cursor: replyText.trim() && connected ? 'pointer' : 'not-allowed',
                           fontSize: 18,
                           fontWeight: 600,
+                          flexShrink: 0,
                         }}
                       >➤</button>
                     </div>
@@ -509,6 +564,7 @@ export default function AdminTickets({
                       textAlign: 'center',
                       fontSize: `${13 * textScale}px`,
                       color: theme.textMuted,
+                      flexShrink: 0,
                     }}>
                       ✅ Тикет закрыт
                     </div>

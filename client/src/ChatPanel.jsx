@@ -15,7 +15,7 @@ export default function ChatPanel({
   isModerator,
   onClose,
 }) {
-  const [tab, setTab] = useState('general'); // 'general' | 'ticket'
+  const [tab, setTab] = useState('general');
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [connected, setConnected] = useState(false);
@@ -23,10 +23,10 @@ export default function ChatPanel({
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
-  // Ticket-состояние
-  const [ticket, setTicket] = useState(null); // { id, status, created_at, messages: [] }
+  const [ticket, setTicket] = useState(null);
   const [ticketLoading, setTicketLoading] = useState(false);
   const [ticketInput, setTicketInput] = useState('');
+  const [creatingTicket, setCreatingTicket] = useState(false);
 
   const socketRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -51,12 +51,10 @@ export default function ChatPanel({
     return `${DD}.${MO} ${HH}:${MM}`;
   }
 
-  // === Инициализация ===
   useEffect(() => {
     let cancelled = false;
 
     async function init() {
-      // 1. Загрузить историю общего чата
       try {
         const { data } = await api.get('/chat/history');
         if (!cancelled) setMessages(data);
@@ -66,7 +64,6 @@ export default function ChatPanel({
         if (!cancelled) setLoading(false);
       }
 
-      // 2. Подключить сокет
       const socket = io(SOCKET_URL, {
         auth: {
           deviceId: getDeviceId(),
@@ -105,7 +102,6 @@ export default function ChatPanel({
         setTimeout(() => setError(''), 3000);
       });
 
-      // Тикет-события
       socket.on('ticket:message', (msg) => {
         if (cancelled) return;
         setTicket((prev) => {
@@ -147,7 +143,6 @@ export default function ChatPanel({
     }
   }, [loading]);
 
-  // === Загрузка тикета ===
   async function loadTicket() {
     setTicketLoading(true);
     try {
@@ -163,7 +158,8 @@ export default function ChatPanel({
     }
   }
 
-  async function openTicket() {
+  async function createNewTicket() {
+    setCreatingTicket(true);
     try {
       const { data } = await api.post('/tickets/open');
       await loadTicket();
@@ -173,10 +169,11 @@ export default function ChatPanel({
     } catch (e) {
       setError('Не удалось открыть обращение');
       setTimeout(() => setError(''), 3000);
+    } finally {
+      setCreatingTicket(false);
     }
   }
 
-  // === Отправка ===
   function sendGeneral() {
     const text = input.trim();
     if (!text) return;
@@ -206,7 +203,6 @@ export default function ChatPanel({
     setTicketInput('');
   }
 
-  // === Удаление (общий чат) ===
   async function deleteMessage(id) {
     if (!confirm('Удалить сообщение?')) return;
     try {
@@ -238,13 +234,13 @@ export default function ChatPanel({
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      padding: 12,
+      padding: 8,
     }}>
       <div style={{
         width: '100%',
         maxWidth: 560,
-        height: '85vh',
-        maxHeight: 800,
+        height: '92vh',
+        maxHeight: 850,
         background: theme.panel,
         color: theme.text,
         borderRadius: 20,
@@ -256,7 +252,7 @@ export default function ChatPanel({
       }}>
         {/* Шапка */}
         <div style={{
-          padding: '14px 16px',
+          padding: '12px 14px',
           borderBottom: `1px solid ${theme.panelBorder}`,
           display: 'flex',
           alignItems: 'center',
@@ -300,6 +296,7 @@ export default function ChatPanel({
               borderRadius: 10,
               fontSize: 20,
               cursor: 'pointer',
+              flexShrink: 0,
             }}
           >×</button>
         </div>
@@ -307,7 +304,7 @@ export default function ChatPanel({
         {/* Табы */}
         <div style={{
           display: 'flex',
-          padding: '8px 12px',
+          padding: '8px 10px',
           gap: 6,
           borderBottom: `1px solid ${theme.panelBorder}`,
         }}>
@@ -315,7 +312,7 @@ export default function ChatPanel({
             onClick={() => setTab('general')}
             style={{
               flex: 1,
-              padding: '10px 12px',
+              padding: '10px 8px',
               border: 'none',
               borderRadius: 10,
               background: tab === 'general'
@@ -323,10 +320,11 @@ export default function ChatPanel({
                 : theme.card,
               color: tab === 'general' ? 'white' : theme.text,
               cursor: 'pointer',
-              fontSize: `${13 * textScale}px`,
+              fontSize: `${12 * textScale}px`,
               fontWeight: 600,
+              whiteSpace: 'nowrap',
             }}
-          >💬 Общий чат</button>
+          >💬 Общий</button>
           <button
             onClick={() => {
               setTab('ticket');
@@ -334,7 +332,7 @@ export default function ChatPanel({
             }}
             style={{
               flex: 1,
-              padding: '10px 12px',
+              padding: '10px 8px',
               border: 'none',
               borderRadius: 10,
               background: tab === 'ticket'
@@ -342,10 +340,11 @@ export default function ChatPanel({
                 : theme.card,
               color: tab === 'ticket' ? 'white' : theme.text,
               cursor: 'pointer',
-              fontSize: `${13 * textScale}px`,
+              fontSize: `${12 * textScale}px`,
               fontWeight: 600,
+              whiteSpace: 'nowrap',
             }}
-          >🛡 Связь с админом</button>
+          >🛡 Админ</button>
         </div>
 
         {/* === ОБЩИЙ ЧАТ === */}
@@ -354,7 +353,7 @@ export default function ChatPanel({
             <div style={{
               flex: 1,
               overflowY: 'auto',
-              padding: 14,
+              padding: 12,
               display: 'flex',
               flexDirection: 'column',
               gap: 10,
@@ -448,12 +447,12 @@ export default function ChatPanel({
             </div>
 
             <div style={{
-              padding: 12,
+              padding: 10,
               borderTop: `1px solid ${theme.panelBorder}`,
               display: 'flex',
-              gap: 8,
+              gap: 6,
               alignItems: 'flex-end',
-              paddingBottom: 'max(12px, env(safe-area-inset-bottom))',
+              paddingBottom: 'max(10px, env(safe-area-inset-bottom))',
             }}>
               <textarea
                 value={input}
@@ -463,7 +462,7 @@ export default function ChatPanel({
                 rows={1}
                 style={{
                   flex: 1,
-                  padding: 12,
+                  padding: 10,
                   borderRadius: 12,
                   border: `1px solid ${theme.inputBorder}`,
                   background: theme.input,
@@ -472,14 +471,15 @@ export default function ChatPanel({
                   resize: 'none',
                   outline: 'none',
                   fontFamily: 'inherit',
-                  maxHeight: 100,
+                  maxHeight: 90,
+                  minWidth: 0,
                 }}
               />
               <button
                 onClick={sendGeneral}
                 disabled={!input.trim() || !connected}
                 style={{
-                  padding: '12px 16px',
+                  padding: '10px 14px',
                   borderRadius: 12,
                   border: 'none',
                   background: input.trim() && connected
@@ -489,6 +489,7 @@ export default function ChatPanel({
                   cursor: input.trim() && connected ? 'pointer' : 'not-allowed',
                   fontSize: 18,
                   fontWeight: 600,
+                  flexShrink: 0,
                 }}
               >➤</button>
             </div>
@@ -528,16 +529,18 @@ export default function ChatPanel({
                   Здесь вы можете написать админу. Обращение увидят только администраторы.
                 </div>
                 <button
-                  onClick={openTicket}
+                  onClick={createNewTicket}
+                  disabled={creatingTicket}
                   style={{
                     padding: '12px 24px',
                     borderRadius: 12,
                     border: 'none',
                     background: 'linear-gradient(135deg, #16a34a, #15803d)',
                     color: 'white',
-                    cursor: 'pointer',
+                    cursor: creatingTicket ? 'wait' : 'pointer',
                     fontSize: `${14 * textScale}px`,
                     fontWeight: 700,
+                    opacity: creatingTicket ? 0.7 : 1,
                   }}
                 >✍️ Написать админу</button>
               </div>
@@ -545,7 +548,6 @@ export default function ChatPanel({
 
             {!ticketLoading && ticket && (
               <>
-                {/* Статус тикета */}
                 <div style={{
                   padding: '10px 14px',
                   background: ticket.status === 'closed'
@@ -564,7 +566,7 @@ export default function ChatPanel({
                 <div style={{
                   flex: 1,
                   overflowY: 'auto',
-                  padding: 14,
+                  padding: 12,
                   display: 'flex',
                   flexDirection: 'column',
                   gap: 10,
@@ -581,7 +583,7 @@ export default function ChatPanel({
 
                   {ticket.messages?.map((m) => {
                     const isAdminMsg = m.author_is_admin;
-                    const alignRight = !isAdminMsg; // мои слева, админа справа
+                    const alignRight = !isAdminMsg;
                     return (
                       <div key={m.id} style={{
                         display: 'flex',
@@ -624,15 +626,14 @@ export default function ChatPanel({
                   <div ref={ticketEndRef} />
                 </div>
 
-                {/* Поле ввода */}
                 {ticket.status === 'open' ? (
                   <div style={{
-                    padding: 12,
+                    padding: 10,
                     borderTop: `1px solid ${theme.panelBorder}`,
                     display: 'flex',
-                    gap: 8,
+                    gap: 6,
                     alignItems: 'flex-end',
-                    paddingBottom: 'max(12px, env(safe-area-inset-bottom))',
+                    paddingBottom: 'max(10px, env(safe-area-inset-bottom))',
                   }}>
                     <textarea
                       value={ticketInput}
@@ -642,7 +643,7 @@ export default function ChatPanel({
                       rows={1}
                       style={{
                         flex: 1,
-                        padding: 12,
+                        padding: 10,
                         borderRadius: 12,
                         border: `1px solid ${theme.inputBorder}`,
                         background: theme.input,
@@ -651,14 +652,15 @@ export default function ChatPanel({
                         resize: 'none',
                         outline: 'none',
                         fontFamily: 'inherit',
-                        maxHeight: 100,
+                        maxHeight: 90,
+                        minWidth: 0,
                       }}
                     />
                     <button
                       onClick={sendTicket}
                       disabled={!ticketInput.trim() || !connected}
                       style={{
-                        padding: '12px 16px',
+                        padding: '10px 14px',
                         borderRadius: 12,
                         border: 'none',
                         background: ticketInput.trim() && connected
@@ -668,6 +670,7 @@ export default function ChatPanel({
                         cursor: ticketInput.trim() && connected ? 'pointer' : 'not-allowed',
                         fontSize: 18,
                         fontWeight: 600,
+                        flexShrink: 0,
                       }}
                     >➤</button>
                   </div>
@@ -675,11 +678,36 @@ export default function ChatPanel({
                   <div style={{
                     padding: 14,
                     borderTop: `1px solid ${theme.panelBorder}`,
-                    textAlign: 'center',
-                    fontSize: `${13 * textScale}px`,
-                    color: theme.textMuted,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10,
+                    alignItems: 'center',
+                    paddingBottom: 'max(14px, env(safe-area-inset-bottom))',
                   }}>
-                    Обращение закрыто. Откройте новое, если нужно.
+                    <div style={{
+                      fontSize: `${12 * textScale}px`,
+                      color: theme.textMuted,
+                      textAlign: 'center',
+                    }}>
+                      Обращение закрыто
+                    </div>
+                    <button
+                      onClick={createNewTicket}
+                      disabled={creatingTicket}
+                      style={{
+                        padding: '12px 20px',
+                        borderRadius: 12,
+                        border: 'none',
+                        background: 'linear-gradient(135deg, #16a34a, #15803d)',
+                        color: 'white',
+                        cursor: creatingTicket ? 'wait' : 'pointer',
+                        fontSize: `${14 * textScale}px`,
+                        fontWeight: 700,
+                        opacity: creatingTicket ? 0.7 : 1,
+                        width: '100%',
+                        maxWidth: 300,
+                      }}
+                    >📩 Открыть новое обращение</button>
                   </div>
                 )}
               </>
@@ -687,7 +715,6 @@ export default function ChatPanel({
           </>
         )}
 
-        {/* Ошибка */}
         {error && (
           <div style={{
             padding: '8px 14px',
