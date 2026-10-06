@@ -942,7 +942,7 @@ export default function App() {
         style={{
           position: 'absolute',
           top: 12,
-          right: 130,
+          right: 145,
           background: 'linear-gradient(135deg, #1d9bf0, #0e71b8)',
           color: 'white',
           border: 'none',
