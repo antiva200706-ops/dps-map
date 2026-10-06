@@ -1030,7 +1030,7 @@ export default function App() {
       {settings.speedometerEnabled && mySpeed != null && mySpeed > 15 && (
         <div
           style={{
-            position: 'absolute', bottom: 110, left: 12,
+            position: 'absolute', bottom: 130, left: 12,
             zIndex: 1000, display: 'flex', flexDirection: 'column',
             alignItems: 'center', gap: 6,
             userSelect: 'none',
@@ -1111,7 +1111,7 @@ export default function App() {
         onClick={() => setShowRoute(true)}
         style={{
           position: 'absolute',
-          bottom: 174,
+          bottom: 194,
           right: 12,
           width: 52,
           height: 52,
@@ -1136,7 +1136,7 @@ export default function App() {
       <button
         onClick={goToMe}
         style={{
-          position: 'absolute', bottom: 110, right: 12,
+          position: 'absolute', bottom: 130, right: 12,
           width: 52, height: 52, borderRadius: '50%',
           border: 'none',
           background: 'linear-gradient(135deg, #1d9bf0, #0e71b8)',
