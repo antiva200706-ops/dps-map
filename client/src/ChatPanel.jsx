@@ -39,16 +39,33 @@ export default function ChatPanel({
   }
 
   function formatTime(iso) {
-    const date = new Date(iso);
-    const kal = new Date(date.getTime() + 2 * 60 * 60 * 1000 - date.getTimezoneOffset() * 60 * 1000);
+    const d = new Date(iso);
     const now = new Date();
-    const isToday = kal.toDateString() === now.toDateString();
-    const HH = String(kal.getUTCHours()).padStart(2, '0');
-    const MM = String(kal.getUTCMinutes()).padStart(2, '0');
-    if (isToday) return `Сегодня ${HH}:${MM}`;
-    const DD = String(kal.getUTCDate()).padStart(2, '0');
-    const MO = String(kal.getUTCMonth() + 1).padStart(2, '0');
-    return `${DD}.${MO} ${HH}:${MM}`;
+
+    const timeFmt = new Intl.DateTimeFormat('ru-RU', {
+      timeZone: 'Europe/Kaliningrad',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const dayFmt = new Intl.DateTimeFormat('ru-RU', {
+      timeZone: 'Europe/Kaliningrad',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+
+    const HHMM = timeFmt.format(d);
+    const isToday = dayFmt.format(d) === dayFmt.format(now);
+
+    if (isToday) return `Сегодня ${HHMM}`;
+
+    const dateFmt = new Intl.DateTimeFormat('ru-RU', {
+      timeZone: 'Europe/Kaliningrad',
+      day: '2-digit',
+      month: '2-digit',
+    });
+    return `${dateFmt.format(d)} ${HHMM}`;
   }
 
   useEffect(() => {
